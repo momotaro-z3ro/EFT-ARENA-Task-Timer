@@ -138,7 +138,10 @@ async def on_presence_update(before, after):
                     try:
                         await after.send(
                             f"**{game_name}** の起動を検知しました。\n"
-                            f"本日のデイリータスクが開始されます。終了まで: **{format_timedelta(time_left)}**"
+                            f"本日のデイリータスクが開始されます。終了まで: **{format_timedelta(time_left)}**\n\n"
+                            f"💡 **Tips:**\n"
+                            f"・タスク内容をメモに登録したい場合は `/{game_target} about_task` を使用してください。\n"
+                            f"・タイマーの残り時間はずれている可能性があります。正しい時間に修正したい場合は `/{game_target} set_daily_timer` を使用してください。"
                         )
                     except discord.Forbidden:
                         print(f"ユーザー {after.name} ({after.id}) にDMを送信できませんでした。")
@@ -158,7 +161,10 @@ async def on_presence_update(before, after):
                     time_left = new_deadline - now
                     try:
                         await after.send(
-                            f"今週の **{game_name}** ウィークリータスクが開始されます。終了まで: **{format_timedelta(time_left)}**"
+                            f"今週の **{game_name}** ウィークリータスクが開始されます。終了まで: **{format_timedelta(time_left)}**\n\n"
+                            f"💡 **Tips:**\n"
+                            f"・タスク内容をメモに登録したい場合は `/{game_target} about_task` を使用してください。\n"
+                            f"・タイマーの残り時間はずれている可能性があります。正しい時間に修正したい場合は `/{game_target} set_weekly_timer` を使用してください。"
                         )
                     except discord.Forbidden:
                         pass
@@ -265,6 +271,12 @@ class TaskSelectView(discord.ui.View):
             
         selected = self.select.values[0]
         if selected == "all":
+            # すべてのサブタスクを完了済みとしてマークする
+            all_tasks = db.get_user_tasks(self.user_id, self.game_target, self.task_type)
+            for t in all_tasks:
+                if not t['completed']:
+                    db.complete_individual_task(self.user_id, self.game_target, self.task_type, t['task_index'])
+
             next_start = db.complete_task(self.user_id, self.game_target, self.task_type)
             if next_start:
                 now = datetime.datetime.now(datetime.timezone.utc)
@@ -376,6 +388,11 @@ class EFTGroup(discord.app_commands.Group):
                     response_lines.append(f"✅ **デイリー**: 完了済み！ 次のタスクは **{format_timedelta(time_left)}** 後に開始可能")
                 else:
                     response_lines.append(f"⏳ **デイリー** 残り時間: **{format_timedelta(time_left)}**")
+                    rem_sec = user_data.get('eft_daily_reminder_seconds', 0)
+                    rem_sent = user_data.get('eft_daily_reminder_sent', 0)
+                    if rem_sec > 0 and not rem_sent:
+                        rem_once = "今回限り" if user_data.get('eft_daily_reminder_once') else "いつでも"
+                        response_lines.append(f"  ⏰ 終了 **{format_timedelta(datetime.timedelta(seconds=rem_sec))}前** にお知らせします ({rem_once})")
                     
                 tasks = db.get_user_tasks(interaction.user.id, 'eft', 'daily')
                 for t in tasks:
@@ -395,6 +412,11 @@ class EFTGroup(discord.app_commands.Group):
                     response_lines.append(f"✅ **ウィークリー**: 完了済み！ 次のタスクは **{format_timedelta(time_left)}** 後に開始可能")
                 else:
                     response_lines.append(f"⏳ **ウィークリー** 残り時間: **{format_timedelta(time_left)}**")
+                    rem_sec = user_data.get('eft_weekly_reminder_seconds', 0)
+                    rem_sent = user_data.get('eft_weekly_reminder_sent', 0)
+                    if rem_sec > 0 and not rem_sent:
+                        rem_once = "今回限り" if user_data.get('eft_weekly_reminder_once') else "いつでも"
+                        response_lines.append(f"  ⏰ 終了 **{format_timedelta(datetime.timedelta(seconds=rem_sec))}前** にお知らせします ({rem_once})")
                     
                 tasks = db.get_user_tasks(interaction.user.id, 'eft', 'weekly')
                 for t in tasks:
@@ -540,22 +562,30 @@ class EFTGroup(discord.app_commands.Group):
         jst_deadline = deadline.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
         await interaction.response.send_message(f"EFTウィークリータスクを手動で開始しました！\n終了まで: **{days}日{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
 
-class EFTReminderGroup(discord.app_commands.Group):
-    def __init__(self, parent: discord.app_commands.Group):
-        super().__init__(name="reminder", description="EFTのリマインダー関連のコマンド", parent=parent)
-
-    @discord.app_commands.command(name="set", description="EFTタスク終了前のリマインダー時間を設定します。")
-    @discord.app_commands.describe(task_type="タスクの種類 ('daily' または 'weekly')", hours="タスク終了の何時間前に通知を受け取るか")
-    async def set(self, interaction: discord.Interaction, task_type: str, hours: int):
-        task_type = task_type.lower()
-        if task_type not in ['daily', 'weekly']:
-            await interaction.response.send_message("`task_type`は 'daily' または 'weekly' を指定してください。", ephemeral=True)
+    @discord.app_commands.command(name="reminder", description="EFTタスク終了前のリマインダー通知の時間を設定、または解除します。")
+    @discord.app_commands.describe(task_type="タスクの種類", hours="何時間前にお知らせするか", minutes="何分前にお知らせするか", seconds="何秒前にお知らせするか", once="今回限りの設定にするか")
+    @discord.app_commands.choices(task_type=[
+        discord.app_commands.Choice(name="デイリー", value="daily"),
+        discord.app_commands.Choice(name="ウィークリー", value="weekly")
+    ])
+    @discord.app_commands.choices(once=[
+        discord.app_commands.Choice(name="今回限り", value=1),
+        discord.app_commands.Choice(name="いつでも（毎回適用）", value=0)
+    ])
+    async def reminder(self, interaction: discord.Interaction, task_type: str, hours: int = 0, minutes: int = 0, seconds: int = 0, once: int = 0):
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        
+        if total_seconds == 0:
+            db.set_reminder(interaction.user.id, 'eft', task_type, 0, False)
+            await interaction.response.send_message(f"EFTの{task_type}タスクのリマインダーを**解除**しました。", ephemeral=True)
             return
-        if not (1 <= hours <= 23 and task_type == 'daily') and not (1 <= hours <= 167 and task_type == 'weekly'):
-            await interaction.response.send_message("無効な時間です。デイリーは1-23時間、ウィークリーは1-167時間で設定してください。", ephemeral=True)
-            return
-        db.set_reminder_hours(interaction.user.id, 'eft', task_type, hours)
-        await interaction.response.send_message(f"EFTの{task_type.capitalize()}タスクのリマインダーを終了 **{hours}** 時間前に設定しました。", ephemeral=True)
+            
+        is_once = bool(once)
+        db.set_reminder(interaction.user.id, 'eft', task_type, total_seconds, is_once)
+        
+        rem_once_str = "今回限り" if is_once else "いつでも（毎回適用）"
+        time_str = format_timedelta(datetime.timedelta(seconds=total_seconds))
+        await interaction.response.send_message(f"EFTの{task_type}タスクのリマインダーを 終了 **{time_str}前** に設定しました。（{rem_once_str}）", ephemeral=True)
 
 # --------------------------------------------------------------------------------
 # スラッシュコマンド (ARENA)
@@ -581,6 +611,11 @@ class ARENAGroup(discord.app_commands.Group):
                     response_lines.append(f"✅ **デイリー**: 完了済み！ 次のタスクは **{format_timedelta(time_left)}** 後に開始可能")
                 else:
                     response_lines.append(f"⏳ **デイリー** 残り時間: **{format_timedelta(time_left)}**")
+                    rem_sec = user_data.get('arena_daily_reminder_seconds', 0)
+                    rem_sent = user_data.get('arena_daily_reminder_sent', 0)
+                    if rem_sec > 0 and not rem_sent:
+                        rem_once = "今回限り" if user_data.get('arena_daily_reminder_once') else "いつでも"
+                        response_lines.append(f"  ⏰ 終了 **{format_timedelta(datetime.timedelta(seconds=rem_sec))}前** にお知らせします ({rem_once})")
                     
                 tasks = db.get_user_tasks(interaction.user.id, 'arena', 'daily')
                 for t in tasks:
@@ -600,6 +635,11 @@ class ARENAGroup(discord.app_commands.Group):
                     response_lines.append(f"✅ **ウィークリー**: 完了済み！ 次のタスクは **{format_timedelta(time_left)}** 後に開始可能")
                 else:
                     response_lines.append(f"⏳ **ウィークリー** 残り時間: **{format_timedelta(time_left)}**")
+                    rem_sec = user_data.get('arena_weekly_reminder_seconds', 0)
+                    rem_sent = user_data.get('arena_weekly_reminder_sent', 0)
+                    if rem_sec > 0 and not rem_sent:
+                        rem_once = "今回限り" if user_data.get('arena_weekly_reminder_once') else "いつでも"
+                        response_lines.append(f"  ⏰ 終了 **{format_timedelta(datetime.timedelta(seconds=rem_sec))}前** にお知らせします ({rem_once})")
                     
                 tasks = db.get_user_tasks(interaction.user.id, 'arena', 'weekly')
                 for t in tasks:
@@ -744,32 +784,51 @@ class ARENAGroup(discord.app_commands.Group):
         jst_deadline = deadline.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
         await interaction.response.send_message(f"ARENAウィークリータスクを手動で開始しました！\n終了まで: **{days}日{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
 
-class ARENAReminderGroup(discord.app_commands.Group):
-    def __init__(self, parent: discord.app_commands.Group):
-        super().__init__(name="reminder", description="ARENAのリマインダー関連のコマンド", parent=parent)
-
-    @discord.app_commands.command(name="set", description="ARENAタスク終了前のリマインダー時間を設定します。")
-    @discord.app_commands.describe(task_type="タスクの種類 ('daily' または 'weekly')", hours="タスク終了の何時間前に通知を受け取るか")
-    async def set(self, interaction: discord.Interaction, task_type: str, hours: int):
-        task_type = task_type.lower()
-        if task_type not in ['daily', 'weekly']:
-            await interaction.response.send_message("`task_type`は 'daily' または 'weekly' を指定してください。", ephemeral=True)
+    @discord.app_commands.command(name="reminder", description="ARENAタスク終了前のリマインダー通知の時間を設定、または解除します。")
+    @discord.app_commands.describe(task_type="タスクの種類", hours="何時間前にお知らせするか", minutes="何分前にお知らせするか", seconds="何秒前にお知らせするか", once="今回限りの設定にするか")
+    @discord.app_commands.choices(task_type=[
+        discord.app_commands.Choice(name="デイリー", value="daily"),
+        discord.app_commands.Choice(name="ウィークリー", value="weekly")
+    ])
+    @discord.app_commands.choices(once=[
+        discord.app_commands.Choice(name="今回限り", value=1),
+        discord.app_commands.Choice(name="いつでも（毎回適用）", value=0)
+    ])
+    async def reminder(self, interaction: discord.Interaction, task_type: str, hours: int = 0, minutes: int = 0, seconds: int = 0, once: int = 0):
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        
+        if total_seconds == 0:
+            db.set_reminder(interaction.user.id, 'arena', task_type, 0, False)
+            await interaction.response.send_message(f"ARENAの{task_type}タスクのリマインダーを**解除**しました。", ephemeral=True)
             return
-        if not (1 <= hours <= 23 and task_type == 'daily') and not (1 <= hours <= 167 and task_type == 'weekly'):
-            await interaction.response.send_message("無効な時間です。デイリーは1-23時間、ウィークリーは1-167時間で設定してください。", ephemeral=True)
-            return
-        db.set_reminder_hours(interaction.user.id, 'arena', task_type, hours)
-        await interaction.response.send_message(f"ARENAの{task_type.capitalize()}タスクのリマインダーを終了 **{hours}** 時間前に設定しました。", ephemeral=True)
+            
+        is_once = bool(once)
+        db.set_reminder(interaction.user.id, 'arena', task_type, total_seconds, is_once)
+        
+        rem_once_str = "今回限り" if is_once else "いつでも（毎回適用）"
+        time_str = format_timedelta(datetime.timedelta(seconds=total_seconds))
+        await interaction.response.send_message(f"ARENAの{task_type}タスクのリマインダーを 終了 **{time_str}前** に設定しました。（{rem_once_str}）", ephemeral=True)
 
 # Botの非同期セットアップフック
 async def setup_hook():
     eft_commands = EFTGroup()
-    EFTReminderGroup(parent=eft_commands)
     bot.tree.add_command(eft_commands)
 
     arena_commands = ARENAGroup()
-    ARENAReminderGroup(parent=arena_commands)
     bot.tree.add_command(arena_commands)
+
+    @bot.tree.command(name="help", description="このBotの使い方とコマンド一覧を表示します。")
+    async def help_command(interaction: discord.Interaction):
+        help_text = (
+            "**EFT/ARENA タスクリマインダーBot の使い方**\n\n"
+            "1. **自動検知**: Escape from Tarkov または Tarkov: ARENA を起動すると、自動的にデイリー/ウィークリータイマーが開始され、DMに通知が届きます。\n"
+            "2. **タスクの登録**: `/eft about_task` や `/arena about_task` で、現在のタスク内容をメモできます。\n"
+            "3. **手動タイマー調整**: 実際の残り時間とずれている場合は、`/eft set_daily_timer` 等で時間を直接指定してタイマーを開始できます。\n"
+            "4. **完了報告**: `/eft done_daily` などのコマンドを実行し、完了したタスクを選ぶと、次回ゲーム起動時までタイマーが停止します。\n"
+            "5. **状態確認**: `/eft status` 等で現在のタイマーと登録したタスクの進捗が確認できます。\n\n"
+            "※コマンドは `/eft [コマンド名]` または `/arena [コマンド名]` のようにグループ化されています。"
+        )
+        await interaction.response.send_message(help_text, ephemeral=True)
 
 bot.setup_hook = setup_hook
 

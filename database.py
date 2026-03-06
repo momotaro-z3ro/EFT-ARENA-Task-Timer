@@ -24,18 +24,22 @@ class Database:
                 user_id INTEGER PRIMARY KEY,
                 eft_daily_deadline TIMESTAMP,
                 eft_weekly_deadline TIMESTAMP,
-                eft_daily_reminder_hours INTEGER DEFAULT 3,
-                eft_weekly_reminder_hours INTEGER DEFAULT 24,
+                eft_daily_reminder_seconds INTEGER DEFAULT 10800,
+                eft_weekly_reminder_seconds INTEGER DEFAULT 86400,
                 eft_daily_reminder_sent BOOLEAN DEFAULT 0,
                 eft_weekly_reminder_sent BOOLEAN DEFAULT 0,
+                eft_daily_reminder_once BOOLEAN DEFAULT 0,
+                eft_weekly_reminder_once BOOLEAN DEFAULT 0,
                 eft_daily_completed BOOLEAN DEFAULT 0,
                 eft_weekly_completed BOOLEAN DEFAULT 0,
                 arena_daily_deadline TIMESTAMP,
                 arena_weekly_deadline TIMESTAMP,
-                arena_daily_reminder_hours INTEGER DEFAULT 3,
-                arena_weekly_reminder_hours INTEGER DEFAULT 24,
+                arena_daily_reminder_seconds INTEGER DEFAULT 10800,
+                arena_weekly_reminder_seconds INTEGER DEFAULT 86400,
                 arena_daily_reminder_sent BOOLEAN DEFAULT 0,
                 arena_weekly_reminder_sent BOOLEAN DEFAULT 0,
+                arena_daily_reminder_once BOOLEAN DEFAULT 0,
+                arena_weekly_reminder_once BOOLEAN DEFAULT 0,
                 arena_daily_completed BOOLEAN DEFAULT 0,
                 arena_weekly_completed BOOLEAN DEFAULT 0
             )
@@ -83,9 +87,13 @@ class Database:
         self.reset_user_tasks(user_id, game_target, task_type)
         now = datetime.datetime.now(datetime.timezone.utc)
         
+        user_data = self.get_user(user_id)
+        
         deadline_col = f"{game_target}_{task_type}_deadline"
         sent_flag_col = f"{game_target}_{task_type}_reminder_sent"
         completed_col = f"{game_target}_{task_type}_completed"
+        seconds_col = f"{game_target}_{task_type}_reminder_seconds"
+        once_col = f"{game_target}_{task_type}_reminder_once"
 
         if task_type == 'daily':
             if game_target == 'eft':
@@ -99,6 +107,13 @@ class Database:
                 deadline = now + datetime.timedelta(days=7)
         else:
             return None
+
+        # 今回限りのリマインダーならリセットする
+        if user_data and user_data.get(once_col):
+            self.cursor.execute(
+                f"UPDATE users SET {seconds_col} = 0, {once_col} = 0 WHERE user_id = ?",
+                (user_id,)
+            )
 
         self.cursor.execute(
             f"UPDATE users SET {deadline_col} = ?, {sent_flag_col} = 0, {completed_col} = 0 WHERE user_id = ?",
@@ -129,17 +144,18 @@ class Database:
         deadline = datetime.datetime.fromisoformat(deadline_str)
         return deadline
 
-    def set_reminder_hours(self, user_id, game_target, task_type, hours):
+    def set_reminder(self, user_id, game_target, task_type, seconds: int, once: bool):
         """
-        タスクのリマインダー時間を設定する。
+        タスクのリマインダー時間を設定する。0秒の場合は無効化を意味する。
         """
         self.add_user_if_not_exists(user_id)
-        column_name = f'{game_target}_{task_type}_reminder_hours'
-        sent_flag_name = f'{game_target}_{task_type}_reminder_sent'
+        seconds_col = f'{game_target}_{task_type}_reminder_seconds'
+        once_col = f'{game_target}_{task_type}_reminder_once'
+        sent_flag_col = f'{game_target}_{task_type}_reminder_sent'
         
         self.cursor.execute(
-            f"UPDATE users SET {column_name} = ?, {sent_flag_name} = 0 WHERE user_id = ?",
-            (hours, user_id)
+            f"UPDATE users SET {seconds_col} = ?, {once_col} = ?, {sent_flag_col} = 0 WHERE user_id = ?",
+            (seconds, 1 if once else 0, user_id)
         )
         self.conn.commit()
 
@@ -153,20 +169,20 @@ class Database:
         for game in ['eft', 'arena']:
             for task in ['daily', 'weekly']:
                 deadline_col = f"{game}_{task}_deadline"
-                hours_col = f"{game}_{task}_reminder_hours"
+                seconds_col = f"{game}_{task}_reminder_seconds"
                 sent_col = f"{game}_{task}_reminder_sent"
                 completed_col = f"{game}_{task}_completed"
 
                 query = f"""
-                    SELECT user_id, {deadline_col}, {hours_col} FROM users
-                    WHERE {deadline_col} IS NOT NULL AND {sent_col} = 0 AND {completed_col} = 0
+                    SELECT user_id, {deadline_col}, {seconds_col} FROM users
+                    WHERE {deadline_col} IS NOT NULL AND {sent_col} = 0 AND {completed_col} = 0 AND {seconds_col} > 0
                 """
                 self.cursor.execute(query)
                 reminders = self.cursor.fetchall()
 
-                for user_id, deadline_str, hours in reminders:
+                for user_id, deadline_str, seconds in reminders:
                     deadline = datetime.datetime.fromisoformat(deadline_str)
-                    reminder_time = deadline - datetime.timedelta(hours=hours)
+                    reminder_time = deadline - datetime.timedelta(seconds=seconds)
                     if now >= reminder_time:
                         pending.append({
                             'user_id': user_id,
@@ -209,9 +225,20 @@ class Database:
         """
         self.add_user_if_not_exists(user_id)
         self.reset_user_tasks(user_id, game_target, task_type)
+        user_data = self.get_user(user_id)
+        
         deadline_col = f"{game_target}_{task_type}_deadline"
         sent_flag_col = f"{game_target}_{task_type}_reminder_sent"
         completed_col = f"{game_target}_{task_type}_completed"
+        seconds_col = f"{game_target}_{task_type}_reminder_seconds"
+        once_col = f"{game_target}_{task_type}_reminder_once"
+
+        # 今回限りのリマインダーならリセットする
+        if user_data and user_data.get(once_col):
+            self.cursor.execute(
+                f"UPDATE users SET {seconds_col} = 0, {once_col} = 0 WHERE user_id = ?",
+                (user_id,)
+            )
 
         self.cursor.execute(
             f"UPDATE users SET {deadline_col} = ?, {sent_flag_col} = 0, {completed_col} = 0 WHERE user_id = ?",
