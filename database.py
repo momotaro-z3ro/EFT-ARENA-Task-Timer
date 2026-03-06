@@ -75,9 +75,15 @@ class Database:
         completed_col = f"{game_target}_{task_type}_completed"
 
         if task_type == 'daily':
-            deadline = now + datetime.timedelta(hours=24)
+            if game_target == 'eft':
+                deadline = now + datetime.timedelta(hours=22)
+            else:
+                deadline = now + datetime.timedelta(hours=24)
         elif task_type == 'weekly':
-            deadline = now + datetime.timedelta(days=7)
+            if game_target == 'eft':
+                deadline = now + datetime.timedelta(days=6, hours=22)
+            else:
+                deadline = now + datetime.timedelta(days=7)
         else:
             return None
 
