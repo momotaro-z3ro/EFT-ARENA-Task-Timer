@@ -1,0 +1,23 @@
+# Environments
+.env
+.venv/
+venv/
+ENV/
+env/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# SQLite
+*.db
+*.sqlite3
+
+# VS Code
+.vscode/
+
+# Ignore local configuration files
+spoofer.py
+debug_reminders.py
+time_travel.py
