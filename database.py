@@ -40,6 +40,18 @@ class Database:
                 arena_weekly_completed BOOLEAN DEFAULT 0
             )
         ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                game_target TEXT,
+                task_type TEXT,
+                task_index INTEGER,
+                description TEXT,
+                completed BOOLEAN DEFAULT 0,
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            )
+        ''')
         self.conn.commit()
 
     def get_user(self, user_id):
@@ -68,6 +80,7 @@ class Database:
         指定されたゲーム（'eft'か'arena'）とタスクタイプ（'daily'か'weekly'）のカウントダウンを開始（更新）する。
         """
         self.add_user_if_not_exists(user_id)
+        self.reset_user_tasks(user_id, game_target, task_type)
         now = datetime.datetime.now(datetime.timezone.utc)
         
         deadline_col = f"{game_target}_{task_type}_deadline"
@@ -195,6 +208,7 @@ class Database:
         タスクの終了期限を手動で設定し、完了・通知状態をリセットする。
         """
         self.add_user_if_not_exists(user_id)
+        self.reset_user_tasks(user_id, game_target, task_type)
         deadline_col = f"{game_target}_{task_type}_deadline"
         sent_flag_col = f"{game_target}_{task_type}_reminder_sent"
         completed_col = f"{game_target}_{task_type}_completed"
@@ -207,6 +221,78 @@ class Database:
 
         return new_deadline
 
+    # --------------------------------------------------------------------------------
+    # 個別タスク管理
+    # --------------------------------------------------------------------------------
+
+    def set_user_tasks(self, user_id, game_target, task_type, tasks_dict: dict):
+        """
+        ユーザーの個別タスク（説明文）を保存する。既存のものを上書き・削除する。
+        tasks_dict: {1: "task desc", 2: "another desc"} (Noneや空文字ならスキップされる想定)
+        """
+        self.add_user_if_not_exists(user_id)
+        # 既存タスクを削除
+        self.cursor.execute(
+            "DELETE FROM user_tasks WHERE user_id = ? AND game_target = ? AND task_type = ?",
+            (user_id, game_target, task_type)
+        )
+        
+        # 新しいタスクを挿入
+        for index, desc in tasks_dict.items():
+            if desc and str(desc).lower() != "none" and str(desc).strip() != "":
+                self.cursor.execute(
+                    "INSERT INTO user_tasks (user_id, game_target, task_type, task_index, description, completed) VALUES (?, ?, ?, ?, ?, 0)",
+                    (user_id, game_target, task_type, index, str(desc).strip())
+                )
+        self.conn.commit()
+
+    def get_user_tasks(self, user_id, game_target, task_type):
+        """
+        登録された個別タスクの一覧を取得する。
+        """
+        self.cursor.execute(
+            "SELECT task_index, description, completed FROM user_tasks WHERE user_id = ? AND game_target = ? AND task_type = ? ORDER BY task_index ASC",
+            (user_id, game_target, task_type)
+        )
+        rows = self.cursor.fetchall()
+        tasks = []
+        for index, desc, completed in rows:
+            tasks.append({
+                'task_index': index,
+                'description': desc,
+                'completed': bool(completed)
+            })
+        return tasks
+
+    def complete_individual_task(self, user_id, game_target, task_type, task_index):
+        """
+        個別タスクを完了としてマークする。
+        """
+        self.cursor.execute(
+            "UPDATE user_tasks SET completed = 1 WHERE user_id = ? AND game_target = ? AND task_type = ? AND task_index = ?",
+            (user_id, game_target, task_type, task_index)
+        )
+        self.conn.commit()
+
+    def undo_individual_task(self, user_id, game_target, task_type, task_index):
+        """
+        個別タスクを未完了に戻す。
+        """
+        self.cursor.execute(
+            "UPDATE user_tasks SET completed = 0 WHERE user_id = ? AND game_target = ? AND task_type = ? AND task_index = ?",
+            (user_id, game_target, task_type, task_index)
+        )
+        self.conn.commit()
+
+    def reset_user_tasks(self, user_id, game_target, task_type):
+        """
+        新しいタイマーサイクルの開始に伴い、個別タスクを削除する。
+        """
+        self.cursor.execute(
+            "DELETE FROM user_tasks WHERE user_id = ? AND game_target = ? AND task_type = ?",
+            (user_id, game_target, task_type)
+        )
+        self.conn.commit()
 
 if __name__ == '__main__':
     # テスト用コード (省略)

@@ -42,14 +42,14 @@ TARGET_GAMES = ["Escape from Tarkov", "Tarkov: Arena"]
 # --------------------------------------------------------------------------------
 
 def format_timedelta(td):
-    """timedeltaオブジェクトをフォーマットする。24時間以上なら「X日Y時間Z分」とする"""
+    """timedeltaオブジェクトをフォーマットする。24時間以上なら「X日Y時間Z分W秒」とする"""
     total_seconds = int(td.total_seconds())
     days, remainder = divmod(total_seconds, 86400)
     hours, remainder = divmod(remainder, 3600)
     minutes, seconds = divmod(remainder, 60)
     
     if days > 0:
-        return f"{days}日{hours}時間{minutes}分"
+        return f"{days}日{hours}時間{minutes}分{seconds}秒"
     else:
         return f"{hours}時間{minutes}分{seconds}秒"
 
@@ -234,6 +234,125 @@ async def before_check_reminders():
 
 
 # --------------------------------------------------------------------------------
+# UI コンポーネント
+# --------------------------------------------------------------------------------
+
+class TaskSelectView(discord.ui.View):
+    def __init__(self, user_id, game_target, task_type, tasks):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.game_target = game_target
+        self.task_type = task_type
+        
+        options = []
+        for t in tasks:
+            if not t['completed']:
+                label = t['description']
+                if len(label) > 100:
+                    label = label[:97] + "..."
+                options.append(discord.SelectOption(label=label, value=str(t['task_index'])))
+        
+        options.append(discord.SelectOption(label="すべてのタスクを一括完了する", value="all"))
+        
+        self.select = discord.ui.Select(placeholder="完了したタスクを選択...", options=options)
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
+        
+    async def select_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("あなたはこのメニューを操作できません。", ephemeral=True)
+            return
+            
+        selected = self.select.values[0]
+        if selected == "all":
+            next_start = db.complete_task(self.user_id, self.game_target, self.task_type)
+            if next_start:
+                now = datetime.datetime.now(datetime.timezone.utc)
+                if now < next_start:
+                    time_until = next_start - now
+                    msg = f"{self.game_target.upper()} {self.task_type}タスク完了お疲れ様です！\n次のタスクは **{format_timedelta(time_until)}** 後に開始可能です。"
+                else:
+                    msg = f"{self.game_target.upper()} {self.task_type}タスク完了お疲れ様です！\n次にゲームを起動すると新しいタスクが開始されます。"
+            else:
+                 msg = "現在アクティブなタスクが記録されていません。"
+            await interaction.response.edit_message(content=msg, view=None)
+        else:
+            task_index = int(selected)
+            db.complete_individual_task(self.user_id, self.game_target, self.task_type, task_index)
+            
+            all_tasks = db.get_user_tasks(self.user_id, self.game_target, self.task_type)
+            remaining = [t for t in all_tasks if not t['completed']]
+            
+            if not remaining:
+                next_start = db.complete_task(self.user_id, self.game_target, self.task_type)
+                now = datetime.datetime.now(datetime.timezone.utc)
+                if next_start and now < next_start:
+                    time_until = next_start - now
+                    msg = f"すべてのタスクを完了しました！お疲れ様です！\n次のタスクは **{format_timedelta(time_until)}** 後に開始可能です。"
+                else:
+                    msg = f"すべてのタスクを完了しました！お疲れ様です！\n次にゲームを起動すると新しいタスクが開始されます。"
+            else:
+                desc = next(t['description'] for t in all_tasks if t['task_index'] == task_index)
+                msg = f"✅ タスク「{desc}」を完了しました！\n残り **{len(remaining)}** 個のタスクが進行中です。"
+            await interaction.response.edit_message(content=msg, view=None)
+
+class UndoTaskSelectView(discord.ui.View):
+    def __init__(self, user_id, game_target, task_type, tasks):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.game_target = game_target
+        self.task_type = task_type
+        
+        options = []
+        for t in tasks:
+            if t['completed']:
+                label = t['description']
+                if len(label) > 100:
+                    label = label[:97] + "..."
+                options.append(discord.SelectOption(label=label, value=str(t['task_index'])))
+        
+        options.append(discord.SelectOption(label="すべてのタスクの完了を未完了に戻す", value="all"))
+        
+        self.select = discord.ui.Select(placeholder="未完了に戻すタスクを選択...", options=options)
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
+        
+    async def select_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("あなたはこのメニューを操作できません。", ephemeral=True)
+            return
+            
+        selected = self.select.values[0]
+        if selected == "all":
+            # すべてのサブタスクを未完了に戻す
+            for t in db.get_user_tasks(self.user_id, self.game_target, self.task_type):
+                 db.undo_individual_task(self.user_id, self.game_target, self.task_type, t['task_index'])
+            
+            # メイン処理のundoを呼ぶ
+            result = db.undo_task(self.user_id, self.game_target, self.task_type)
+            if result:
+                now = datetime.datetime.now(datetime.timezone.utc)
+                if now < result:
+                    time_left = result - now
+                    await interaction.response.edit_message(content=f"{self.game_target.upper()}の{self.task_type}タスクをすべて未完了に戻しました。\n残り時間: **{format_timedelta(time_left)}**", view=None)
+                else:
+                    await interaction.response.edit_message(content="完了状態を取り消しましたが、既に期限切れです。\n次にゲームを起動すると新しいタスクが開始されます。", view=None)
+            else:
+                await interaction.response.edit_message(content="取り消すタスクの記録がありません。", view=None)
+        else:
+            task_index = int(selected)
+            db.undo_individual_task(self.user_id, self.game_target, self.task_type, task_index)
+            # 大元のフラグも未完了に戻す
+            result = db.undo_task(self.user_id, self.game_target, self.task_type)
+            
+            all_tasks = db.get_user_tasks(self.user_id, self.game_target, self.task_type)
+            completed_tasks = [t for t in all_tasks if t['completed']]
+            desc = next(t['description'] for t in all_tasks if t['task_index'] == task_index)
+            
+            msg = f"❌ タスク「{desc}」を未完了に戻しました！"
+            await interaction.response.edit_message(content=msg, view=None)
+
+# --------------------------------------------------------------------------------
 # スラッシュコマンド (EFT)
 # --------------------------------------------------------------------------------
 
@@ -257,6 +376,11 @@ class EFTGroup(discord.app_commands.Group):
                     response_lines.append(f"✅ **デイリー**: 完了済み！ 次のタスクは **{format_timedelta(time_left)}** 後に開始可能")
                 else:
                     response_lines.append(f"⏳ **デイリー** 残り時間: **{format_timedelta(time_left)}**")
+                    
+                tasks = db.get_user_tasks(interaction.user.id, 'eft', 'daily')
+                for t in tasks:
+                    mark = "✅" if t['completed'] else "🔲"
+                    response_lines.append(f"  {mark} {t['description']}")
             else:
                 response_lines.append("❌ **デイリー**: 現在アクティブなタスクなし (ゲーム起動で開始)")
         else:
@@ -271,6 +395,11 @@ class EFTGroup(discord.app_commands.Group):
                     response_lines.append(f"✅ **ウィークリー**: 完了済み！ 次のタスクは **{format_timedelta(time_left)}** 後に開始可能")
                 else:
                     response_lines.append(f"⏳ **ウィークリー** 残り時間: **{format_timedelta(time_left)}**")
+                    
+                tasks = db.get_user_tasks(interaction.user.id, 'eft', 'weekly')
+                for t in tasks:
+                    mark = "✅" if t['completed'] else "🔲"
+                    response_lines.append(f"  {mark} {t['description']}")
             else:
                 response_lines.append("❌ **ウィークリー**: 現在アクティブなタスクなし")
         else:
@@ -278,8 +407,34 @@ class EFTGroup(discord.app_commands.Group):
 
         await interaction.response.send_message("\n".join(response_lines), ephemeral=True)
 
+    @discord.app_commands.command(name="about_task", description="EFTの個別のタスク内容を登録します。")
+    @discord.app_commands.describe(task_type="デイリーかウィークリーか選択", task1="タスク1", task2="タスク2", task3="タスク3(デイリー用)", task4="タスク4(デイリー用)")
+    @discord.app_commands.choices(task_type=[
+        discord.app_commands.Choice(name="デイリー", value="daily"),
+        discord.app_commands.Choice(name="ウィークリー", value="weekly")
+    ])
+    async def about_task(self, interaction: discord.Interaction, task_type: str, task1: str = None, task2: str = None, task3: str = None, task4: str = None):
+        if task_type == "weekly" and (task3 or task4):
+            await interaction.response.send_message("ウィークリータスクは2つまでしか登録できません。(task3, task4は無視されます)", ephemeral=True)
+            
+        tasks_dict = {1: task1, 2: task2}
+        if task_type == "daily":
+            tasks_dict[3] = task3
+            tasks_dict[4] = task4
+            
+        db.set_user_tasks(interaction.user.id, "eft", task_type, tasks_dict)
+        await interaction.response.send_message(f"EFTの{task_type}タスク内容を登録しました！ `/eft status` で確認できます。", ephemeral=True)
+
     @discord.app_commands.command(name="done_daily", description="EFTのデイリータスクの完了を報告します。")
     async def done_daily(self, interaction: discord.Interaction):
+        tasks = db.get_user_tasks(interaction.user.id, 'eft', 'daily')
+        incomplete = [t for t in tasks if not t['completed']]
+        
+        if incomplete:
+            view = TaskSelectView(interaction.user.id, 'eft', 'daily', tasks)
+            await interaction.response.send_message("完了した項目を選んでください:", view=view, ephemeral=True)
+            return
+            
         next_start_time = db.complete_task(interaction.user.id, 'eft', 'daily')
         if next_start_time:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -294,6 +449,14 @@ class EFTGroup(discord.app_commands.Group):
 
     @discord.app_commands.command(name="done_weekly", description="EFTのウィークリータスクの完了を報告します。")
     async def done_weekly(self, interaction: discord.Interaction):
+        tasks = db.get_user_tasks(interaction.user.id, 'eft', 'weekly')
+        incomplete = [t for t in tasks if not t['completed']]
+        
+        if incomplete:
+            view = TaskSelectView(interaction.user.id, 'eft', 'weekly', tasks)
+            await interaction.response.send_message("完了した項目を選んでください:", view=view, ephemeral=True)
+            return
+
         next_start_time = db.complete_task(interaction.user.id, 'eft', 'weekly')
         if next_start_time:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -308,6 +471,14 @@ class EFTGroup(discord.app_commands.Group):
 
     @discord.app_commands.command(name="undone_daily", description="EFTのデイリータスクの完了状態を取り消し、進行中に戻します。")
     async def undone_daily(self, interaction: discord.Interaction):
+        tasks = db.get_user_tasks(interaction.user.id, 'eft', 'daily')
+        completed = [t for t in tasks if t['completed']]
+        
+        if completed:
+            view = UndoTaskSelectView(interaction.user.id, 'eft', 'daily', tasks)
+            await interaction.response.send_message("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
+            return
+            
         result = db.undo_task(interaction.user.id, 'eft', 'daily')
         if result:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -321,6 +492,14 @@ class EFTGroup(discord.app_commands.Group):
 
     @discord.app_commands.command(name="undone_weekly", description="EFTのウィークリータスクの完了状態を取り消し、進行中に戻します。")
     async def undone_weekly(self, interaction: discord.Interaction):
+        tasks = db.get_user_tasks(interaction.user.id, 'eft', 'weekly')
+        completed = [t for t in tasks if t['completed']]
+        
+        if completed:
+            view = UndoTaskSelectView(interaction.user.id, 'eft', 'weekly', tasks)
+            await interaction.response.send_message("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
+            return
+            
         result = db.undo_task(interaction.user.id, 'eft', 'weekly')
         if result:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -402,6 +581,11 @@ class ARENAGroup(discord.app_commands.Group):
                     response_lines.append(f"✅ **デイリー**: 完了済み！ 次のタスクは **{format_timedelta(time_left)}** 後に開始可能")
                 else:
                     response_lines.append(f"⏳ **デイリー** 残り時間: **{format_timedelta(time_left)}**")
+                    
+                tasks = db.get_user_tasks(interaction.user.id, 'arena', 'daily')
+                for t in tasks:
+                    mark = "✅" if t['completed'] else "🔲"
+                    response_lines.append(f"  {mark} {t['description']}")
             else:
                 response_lines.append("❌ **デイリー**: 現在アクティブなタスクなし (ゲーム起動で開始)")
         else:
@@ -416,6 +600,11 @@ class ARENAGroup(discord.app_commands.Group):
                     response_lines.append(f"✅ **ウィークリー**: 完了済み！ 次のタスクは **{format_timedelta(time_left)}** 後に開始可能")
                 else:
                     response_lines.append(f"⏳ **ウィークリー** 残り時間: **{format_timedelta(time_left)}**")
+                    
+                tasks = db.get_user_tasks(interaction.user.id, 'arena', 'weekly')
+                for t in tasks:
+                    mark = "✅" if t['completed'] else "🔲"
+                    response_lines.append(f"  {mark} {t['description']}")
             else:
                 response_lines.append("❌ **ウィークリー**: 現在アクティブなタスクなし")
         else:
@@ -423,8 +612,34 @@ class ARENAGroup(discord.app_commands.Group):
 
         await interaction.response.send_message("\n".join(response_lines), ephemeral=True)
 
+    @discord.app_commands.command(name="about_task", description="ARENAの個別のタスク内容を登録します。")
+    @discord.app_commands.describe(task_type="デイリーかウィークリーか選択", task1="タスク1", task2="タスク2(デイリー用)", task3="タスク3(デイリー用)")
+    @discord.app_commands.choices(task_type=[
+        discord.app_commands.Choice(name="デイリー", value="daily"),
+        discord.app_commands.Choice(name="ウィークリー", value="weekly")
+    ])
+    async def about_task(self, interaction: discord.Interaction, task_type: str, task1: str = None, task2: str = None, task3: str = None):
+        if task_type == "weekly" and (task2 or task3):
+            await interaction.response.send_message("ウィークリータスクは1つまでしか登録できません。(task2, task3は無視されます)", ephemeral=True)
+            
+        tasks_dict = {1: task1}
+        if task_type == "daily":
+            tasks_dict[2] = task2
+            tasks_dict[3] = task3
+            
+        db.set_user_tasks(interaction.user.id, "arena", task_type, tasks_dict)
+        await interaction.response.send_message(f"ARENAの{task_type}タスク内容を登録しました！ `/arena status` で確認できます。", ephemeral=True)
+
     @discord.app_commands.command(name="done_daily", description="ARENAのデイリータスクの完了を報告します。")
     async def done_daily(self, interaction: discord.Interaction):
+        tasks = db.get_user_tasks(interaction.user.id, 'arena', 'daily')
+        incomplete = [t for t in tasks if not t['completed']]
+        
+        if incomplete:
+            view = TaskSelectView(interaction.user.id, 'arena', 'daily', tasks)
+            await interaction.response.send_message("完了した項目を選んでください:", view=view, ephemeral=True)
+            return
+
         next_start_time = db.complete_task(interaction.user.id, 'arena', 'daily')
         if next_start_time:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -439,6 +654,14 @@ class ARENAGroup(discord.app_commands.Group):
 
     @discord.app_commands.command(name="done_weekly", description="ARENAのウィークリータスクの完了を報告します。")
     async def done_weekly(self, interaction: discord.Interaction):
+        tasks = db.get_user_tasks(interaction.user.id, 'arena', 'weekly')
+        incomplete = [t for t in tasks if not t['completed']]
+        
+        if incomplete:
+            view = TaskSelectView(interaction.user.id, 'arena', 'weekly', tasks)
+            await interaction.response.send_message("完了した項目を選んでください:", view=view, ephemeral=True)
+            return
+            
         next_start_time = db.complete_task(interaction.user.id, 'arena', 'weekly')
         if next_start_time:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -453,6 +676,14 @@ class ARENAGroup(discord.app_commands.Group):
 
     @discord.app_commands.command(name="undone_daily", description="ARENAのデイリータスクの完了状態を取り消し、進行中に戻します。")
     async def undone_daily(self, interaction: discord.Interaction):
+        tasks = db.get_user_tasks(interaction.user.id, 'arena', 'daily')
+        completed = [t for t in tasks if t['completed']]
+        
+        if completed:
+            view = UndoTaskSelectView(interaction.user.id, 'arena', 'daily', tasks)
+            await interaction.response.send_message("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
+            return
+
         result = db.undo_task(interaction.user.id, 'arena', 'daily')
         if result:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -466,6 +697,14 @@ class ARENAGroup(discord.app_commands.Group):
 
     @discord.app_commands.command(name="undone_weekly", description="ARENAのウィークリータスクの完了状態を取り消し、進行中に戻します。")
     async def undone_weekly(self, interaction: discord.Interaction):
+        tasks = db.get_user_tasks(interaction.user.id, 'arena', 'weekly')
+        completed = [t for t in tasks if t['completed']]
+        
+        if completed:
+            view = UndoTaskSelectView(interaction.user.id, 'arena', 'weekly', tasks)
+            await interaction.response.send_message("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
+            return
+            
         result = db.undo_task(interaction.user.id, 'arena', 'weekly')
         if result:
             now = datetime.datetime.now(datetime.timezone.utc)
