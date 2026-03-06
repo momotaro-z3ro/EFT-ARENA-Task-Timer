@@ -278,8 +278,8 @@ class EFTGroup(discord.app_commands.Group):
 
         await interaction.response.send_message("\n".join(response_lines), ephemeral=True)
 
-    @discord.app_commands.command(name="daily_done", description="EFTのデイリータスクの完了を報告します。")
-    async def daily_done(self, interaction: discord.Interaction):
+    @discord.app_commands.command(name="done_daily", description="EFTのデイリータスクの完了を報告します。")
+    async def done_daily(self, interaction: discord.Interaction):
         next_start_time = db.complete_task(interaction.user.id, 'eft', 'daily')
         if next_start_time:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -292,8 +292,8 @@ class EFTGroup(discord.app_commands.Group):
         else:
             await interaction.response.send_message("現在アクティブなEFTデイリータスクが記録されていません。", ephemeral=True)
 
-    @discord.app_commands.command(name="weekly_done", description="EFTのウィークリータスクの完了を報告します。")
-    async def weekly_done(self, interaction: discord.Interaction):
+    @discord.app_commands.command(name="done_weekly", description="EFTのウィークリータスクの完了を報告します。")
+    async def done_weekly(self, interaction: discord.Interaction):
         next_start_time = db.complete_task(interaction.user.id, 'eft', 'weekly')
         if next_start_time:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -333,33 +333,33 @@ class EFTGroup(discord.app_commands.Group):
             await interaction.response.send_message("取り消すEFTウィークリータスクの記録がありません。", ephemeral=True)
 
     @discord.app_commands.command(name="set_daily_timer", description="EFTデイリータスクの残り時間を手動で設定し、タイマーを開始します。")
-    @discord.app_commands.describe(hours="終了までの残り時間（1〜24時間）")
-    async def set_daily_timer(self, interaction: discord.Interaction, hours: int):
-        if not (1 <= hours <= 24):
-            await interaction.response.send_message("時間は1から24の間で指定してください。", ephemeral=True)
+    @discord.app_commands.describe(hours="終了までの残り時間（0〜24時間）", minutes="終了までの残り時間（0〜59分）", seconds="終了までの残り時間（0〜59秒）")
+    async def set_daily_timer(self, interaction: discord.Interaction, hours: int, minutes: int = 0, seconds: int = 0):
+        if not (0 <= hours <= 24) or not (0 <= minutes <= 59) or not (0 <= seconds <= 59) or (hours == 0 and minutes == 0 and seconds == 0):
+            await interaction.response.send_message("有効な期間を指定してください（最大24時間0分0秒まで）。", ephemeral=True)
             return
         
         now = datetime.datetime.now(datetime.timezone.utc)
-        deadline = now + datetime.timedelta(hours=hours)
+        deadline = now + datetime.timedelta(hours=hours, minutes=minutes, seconds=seconds)
         db.set_manual_deadline(interaction.user.id, 'eft', 'daily', deadline)
         
         # JSTで期限を表示
         jst_deadline = deadline.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
-        await interaction.response.send_message(f"EFTデイリータスクを手動で開始しました！\n終了まで: **{hours}時間0分0秒** ({jst_deadline.strftime('%m/%d %H:%M')} まで)", ephemeral=True)
+        await interaction.response.send_message(f"EFTデイリータスクを手動で開始しました！\n終了まで: **{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
 
     @discord.app_commands.command(name="set_weekly_timer", description="EFTウィークリータスクの残り時間を手動で設定し、タイマーを開始します。")
-    @discord.app_commands.describe(days="終了までの残り日数（0〜7日）", hours="さらに加算する残り時間（0〜23時間）")
-    async def set_weekly_timer(self, interaction: discord.Interaction, days: int, hours: int):
-        if not (0 <= days <= 7) or not (0 <= hours <= 23) or (days == 0 and hours == 0):
-            await interaction.response.send_message("有効な期間を指定してください（最大7日0時間まで）。", ephemeral=True)
+    @discord.app_commands.describe(days="終了までの残り日数（0〜7日）", hours="さらに加算する残り時間（0〜23時間）", minutes="さらに加算する残り時間（0〜59分）", seconds="さらに加算する残り時間（0〜59秒）")
+    async def set_weekly_timer(self, interaction: discord.Interaction, days: int, hours: int, minutes: int = 0, seconds: int = 0):
+        if not (0 <= days <= 7) or not (0 <= hours <= 23) or not (0 <= minutes <= 59) or not (0 <= seconds <= 59) or (days == 0 and hours == 0 and minutes == 0 and seconds == 0):
+            await interaction.response.send_message("有効な期間を指定してください（最大7日0時間0分0秒まで）。", ephemeral=True)
             return
             
         now = datetime.datetime.now(datetime.timezone.utc)
-        deadline = now + datetime.timedelta(days=days, hours=hours)
+        deadline = now + datetime.timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
         db.set_manual_deadline(interaction.user.id, 'eft', 'weekly', deadline)
         
         jst_deadline = deadline.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
-        await interaction.response.send_message(f"EFTウィークリータスクを手動で開始しました！\n終了まで: **{days}日{hours}時間** ({jst_deadline.strftime('%m/%d %H:%M')} まで)", ephemeral=True)
+        await interaction.response.send_message(f"EFTウィークリータスクを手動で開始しました！\n終了まで: **{days}日{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
 
 class EFTReminderGroup(discord.app_commands.Group):
     def __init__(self, parent: discord.app_commands.Group):
@@ -423,8 +423,8 @@ class ARENAGroup(discord.app_commands.Group):
 
         await interaction.response.send_message("\n".join(response_lines), ephemeral=True)
 
-    @discord.app_commands.command(name="daily_done", description="ARENAのデイリータスクの完了を報告します。")
-    async def daily_done(self, interaction: discord.Interaction):
+    @discord.app_commands.command(name="done_daily", description="ARENAのデイリータスクの完了を報告します。")
+    async def done_daily(self, interaction: discord.Interaction):
         next_start_time = db.complete_task(interaction.user.id, 'arena', 'daily')
         if next_start_time:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -437,8 +437,8 @@ class ARENAGroup(discord.app_commands.Group):
         else:
             await interaction.response.send_message("現在アクティブなARENAデイリータスクが記録されていません。", ephemeral=True)
 
-    @discord.app_commands.command(name="weekly_done", description="ARENAのウィークリータスクの完了を報告します。")
-    async def weekly_done(self, interaction: discord.Interaction):
+    @discord.app_commands.command(name="done_weekly", description="ARENAのウィークリータスクの完了を報告します。")
+    async def done_weekly(self, interaction: discord.Interaction):
         next_start_time = db.complete_task(interaction.user.id, 'arena', 'weekly')
         if next_start_time:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -478,32 +478,32 @@ class ARENAGroup(discord.app_commands.Group):
             await interaction.response.send_message("取り消すARENAウィークリータスクの記録がありません。", ephemeral=True)
 
     @discord.app_commands.command(name="set_daily_timer", description="ARENAデイリータスクの残り時間を手動で設定し、タイマーを開始します。")
-    @discord.app_commands.describe(hours="終了までの残り時間（1〜24時間）")
-    async def set_daily_timer(self, interaction: discord.Interaction, hours: int):
-        if not (1 <= hours <= 24):
-            await interaction.response.send_message("時間は1から24の間で指定してください。", ephemeral=True)
+    @discord.app_commands.describe(hours="終了までの残り時間（0〜24時間）", minutes="終了までの残り時間（0〜59分）", seconds="終了までの残り時間（0〜59秒）")
+    async def set_daily_timer(self, interaction: discord.Interaction, hours: int, minutes: int = 0, seconds: int = 0):
+        if not (0 <= hours <= 24) or not (0 <= minutes <= 59) or not (0 <= seconds <= 59) or (hours == 0 and minutes == 0 and seconds == 0):
+            await interaction.response.send_message("有効な期間を指定してください（最大24時間0分0秒まで）。", ephemeral=True)
             return
         
         now = datetime.datetime.now(datetime.timezone.utc)
-        deadline = now + datetime.timedelta(hours=hours)
+        deadline = now + datetime.timedelta(hours=hours, minutes=minutes, seconds=seconds)
         db.set_manual_deadline(interaction.user.id, 'arena', 'daily', deadline)
         
         jst_deadline = deadline.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
-        await interaction.response.send_message(f"ARENAデイリータスクを手動で開始しました！\n終了まで: **{hours}時間0分0秒** ({jst_deadline.strftime('%m/%d %H:%M')} まで)", ephemeral=True)
+        await interaction.response.send_message(f"ARENAデイリータスクを手動で開始しました！\n終了まで: **{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
 
     @discord.app_commands.command(name="set_weekly_timer", description="ARENAウィークリータスクの残り時間を手動で設定し、タイマーを開始します。")
-    @discord.app_commands.describe(days="終了までの残り日数（0〜7日）", hours="さらに加算する残り時間（0〜23時間）")
-    async def set_weekly_timer(self, interaction: discord.Interaction, days: int, hours: int):
-        if not (0 <= days <= 7) or not (0 <= hours <= 23) or (days == 0 and hours == 0):
-            await interaction.response.send_message("有効な期間を指定してください（最大7日0時間まで）。", ephemeral=True)
+    @discord.app_commands.describe(days="終了までの残り日数（0〜7日）", hours="さらに加算する残り時間（0〜23時間）", minutes="さらに加算する残り時間（0〜59分）", seconds="さらに加算する残り時間（0〜59秒）")
+    async def set_weekly_timer(self, interaction: discord.Interaction, days: int, hours: int, minutes: int = 0, seconds: int = 0):
+        if not (0 <= days <= 7) or not (0 <= hours <= 23) or not (0 <= minutes <= 59) or not (0 <= seconds <= 59) or (days == 0 and hours == 0 and minutes == 0 and seconds == 0):
+            await interaction.response.send_message("有効な期間を指定してください（最大7日0時間0分0秒まで）。", ephemeral=True)
             return
             
         now = datetime.datetime.now(datetime.timezone.utc)
-        deadline = now + datetime.timedelta(days=days, hours=hours)
+        deadline = now + datetime.timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
         db.set_manual_deadline(interaction.user.id, 'arena', 'weekly', deadline)
         
         jst_deadline = deadline.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
-        await interaction.response.send_message(f"ARENAウィークリータスクを手動で開始しました！\n終了まで: **{days}日{hours}時間** ({jst_deadline.strftime('%m/%d %H:%M')} まで)", ephemeral=True)
+        await interaction.response.send_message(f"ARENAウィークリータスクを手動で開始しました！\n終了まで: **{days}日{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
 
 class ARENAReminderGroup(discord.app_commands.Group):
     def __init__(self, parent: discord.app_commands.Group):
