@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 from database import Database
 import datetime
+import asyncio
 
 # .envファイルをロードして環境変数を読み込む
 load_dotenv()
@@ -80,6 +81,9 @@ async def on_ready():
 
 
 
+# 同時実行を防ぐためのロック (ユーザーID -> asyncio.Lock)
+user_locks = {}
+
 # EFTとARENAのDiscord Application ID
 EFT_APP_ID = "406637848297472017"
 ARENA_APP_ID = "1215361187684946010"
@@ -102,51 +106,56 @@ async def on_presence_update(before, after):
         # ゲームを起動した瞬間を捉える (前はプレイしていなくて、今はプレイしている)
         if app_id not in ids_before and app_id in ids_after:
             user_id = after.id
-            now = datetime.datetime.now(datetime.timezone.utc)
             
-            db.add_user_if_not_exists(user_id)
-            user_data = db.get_user(user_id)
+            if user_id not in user_locks:
+                user_locks[user_id] = asyncio.Lock()
 
-            # --- デイリータスクの確認と開始 ---
-            daily_deadline_str = user_data.get(f'{game_target}_daily_deadline')
-            start_new_daily = False
-            if daily_deadline_str:
-                daily_deadline = datetime.datetime.fromisoformat(daily_deadline_str)
-                if now > daily_deadline:
+            async with user_locks[user_id]:
+                now = datetime.datetime.now(datetime.timezone.utc)
+                
+                db.add_user_if_not_exists(user_id)
+                user_data = db.get_user(user_id)
+
+                # --- デイリータスクの確認と開始 ---
+                daily_deadline_str = user_data.get(f'{game_target}_daily_deadline')
+                start_new_daily = False
+                if daily_deadline_str:
+                    daily_deadline = datetime.datetime.fromisoformat(daily_deadline_str)
+                    if now > daily_deadline:
+                        start_new_daily = True
+                else:
                     start_new_daily = True
-            else:
-                start_new_daily = True
 
-            if start_new_daily:
-                new_deadline = db.start_task(user_id, game_target, 'daily')
-                time_left = new_deadline - now
-                try:
-                    await after.send(
-                        f"**{game_name}** の起動を検知しました。\n"
-                        f"本日のデイリータスクが開始されます。終了まで: **{format_timedelta(time_left)}**"
-                    )
-                except discord.Forbidden:
-                    print(f"ユーザー {after.name} ({after.id}) にDMを送信できませんでした。")
+                if start_new_daily:
+                    new_deadline = db.start_task(user_id, game_target, 'daily')
+                    time_left = new_deadline - now
+                    try:
+                        await after.send(
+                            f"**{game_name}** の起動を検知しました。\n"
+                            f"本日のデイリータスクが開始されます。終了まで: **{format_timedelta(time_left)}**"
+                        )
+                    except discord.Forbidden:
+                        print(f"ユーザー {after.name} ({after.id}) にDMを送信できませんでした。")
 
-            # --- ウィークリータスクの確認と開始 ---
-            weekly_deadline_str = user_data.get(f'{game_target}_weekly_deadline')
-            start_new_weekly = False
-            if weekly_deadline_str:
-                weekly_deadline = datetime.datetime.fromisoformat(weekly_deadline_str)
-                if now > weekly_deadline:
+                # --- ウィークリータスクの確認と開始 ---
+                weekly_deadline_str = user_data.get(f'{game_target}_weekly_deadline')
+                start_new_weekly = False
+                if weekly_deadline_str:
+                    weekly_deadline = datetime.datetime.fromisoformat(weekly_deadline_str)
+                    if now > weekly_deadline:
+                        start_new_weekly = True
+                else:
                     start_new_weekly = True
-            else:
-                start_new_weekly = True
-            
-            if start_new_weekly:
-                new_deadline = db.start_task(user_id, game_target, 'weekly')
-                time_left = new_deadline - now
-                try:
-                    await after.send(
-                        f"今週の **{game_name}** ウィークリータスクが開始されます。終了まで: **{format_timedelta(time_left)}**"
-                    )
-                except discord.Forbidden:
-                    pass
+                
+                if start_new_weekly:
+                    new_deadline = db.start_task(user_id, game_target, 'weekly')
+                    time_left = new_deadline - now
+                    try:
+                        await after.send(
+                            f"今週の **{game_name}** ウィークリータスクが開始されます。終了まで: **{format_timedelta(time_left)}**"
+                        )
+                    except discord.Forbidden:
+                        pass
 
     # EFTの起動処理
     await process_game_launch("EFT", "eft", EFT_APP_ID)
