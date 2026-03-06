@@ -185,47 +185,36 @@ async def on_presence_update(before, after):
 
 
 
-@tasks.loop(minutes=1)
-
+@tasks.loop(seconds=5)
 async def check_reminders():
+    """5秒ごとに実行され、リマインダーを送信するタスク"""
+    try:
+        pending = db.get_pending_reminders()
+        now = datetime.datetime.now(datetime.timezone.utc)
 
-    """1分ごとに実行され、リマインダーを送信するタスク"""
+        for reminder in pending:
+            user = bot.get_user(reminder['user_id'])
+            if not user:
+                try:
+                    user = await bot.fetch_user(reminder['user_id'])
+                except discord.NotFound:
+                    continue
 
-    pending = db.get_pending_reminders()
-
-    now = datetime.datetime.now(datetime.timezone.utc)
-
-
-
-    for reminder in pending:
-
-        user = bot.get_user(reminder['user_id'])
-
-        if user:
-
+            game_name = "EFT" if reminder['game_target'] == 'eft' else "ARENA"
             task_type_jp = "デイリー" if reminder['task_type'] == 'daily' else "ウィークリー"
-
             time_left = reminder['deadline'] - now
-
             
-
             try:
-
                 await user.send(
-
-                    f"🔔 **リマインダー** 🔔\n"
-
+                    f"🔔 **{game_name} リマインダー** 🔔\n"
                     f"{task_type_jp}タスクの終了まで残り **{format_timedelta(time_left)}** です！"
-
                 )
-
-                db.mark_reminder_sent(reminder['user_id'], reminder['task_type'])
-
-                print(f"{user.name} に {reminder['task_type']} のリマインダーを送信しました。")
-
+                db.mark_reminder_sent(reminder['user_id'], reminder['game_target'], reminder['task_type'])
+                print(f"{user.name} に {game_name} の {reminder['task_type']} リマインダーを送信しました。")
             except discord.Forbidden:
-
                 print(f"ユーザー {user.name} ({user.id}) にリマインダーDMを送信できませんでした。")
+    except Exception as e:
+        print(f"リマインダーループでエラーが発生しました: {e}")
 
 
 
@@ -579,7 +568,20 @@ class EFTGroup(discord.app_commands.Group):
             db.set_reminder(interaction.user.id, 'eft', task_type, 0, False)
             await interaction.response.send_message(f"EFTの{task_type}タスクのリマインダーを**解除**しました。", ephemeral=True)
             return
-            
+
+        # Check if the reminder is already in the past
+        user_data = db.get_user(interaction.user.id)
+        if user_data:
+            deadline_str = user_data.get(f'eft_{task_type}_deadline')
+            if deadline_str:
+                deadline = datetime.datetime.fromisoformat(deadline_str)
+                now = datetime.datetime.now(datetime.timezone.utc)
+                if deadline > now:
+                    time_left = (deadline - now).total_seconds()
+                    if total_seconds >= time_left:
+                        await interaction.response.send_message("⚠️ エラー: 指定したリマインダー時間は、タスクの残り時間よりも長いため、すぐに発火してしまいます。もっと短い時間を指定してください。", ephemeral=True)
+                        return
+
         is_once = bool(once)
         db.set_reminder(interaction.user.id, 'eft', task_type, total_seconds, is_once)
         
@@ -801,6 +803,19 @@ class ARENAGroup(discord.app_commands.Group):
             db.set_reminder(interaction.user.id, 'arena', task_type, 0, False)
             await interaction.response.send_message(f"ARENAの{task_type}タスクのリマインダーを**解除**しました。", ephemeral=True)
             return
+
+        # Check if the reminder is already in the past
+        user_data = db.get_user(interaction.user.id)
+        if user_data:
+            deadline_str = user_data.get(f'arena_{task_type}_deadline')
+            if deadline_str:
+                deadline = datetime.datetime.fromisoformat(deadline_str)
+                now = datetime.datetime.now(datetime.timezone.utc)
+                if deadline > now:
+                    time_left = (deadline - now).total_seconds()
+                    if total_seconds >= time_left:
+                        await interaction.response.send_message("⚠️ エラー: 指定したリマインダー時間は、タスクの残り時間よりも長いため、すぐに発火してしまいます。もっと短い時間を指定してください。", ephemeral=True)
+                        return
             
         is_once = bool(once)
         db.set_reminder(interaction.user.id, 'arena', task_type, total_seconds, is_once)
