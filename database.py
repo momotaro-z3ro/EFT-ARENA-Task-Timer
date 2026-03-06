@@ -28,12 +28,16 @@ class Database:
                 eft_weekly_reminder_hours INTEGER DEFAULT 24,
                 eft_daily_reminder_sent BOOLEAN DEFAULT 0,
                 eft_weekly_reminder_sent BOOLEAN DEFAULT 0,
+                eft_daily_completed BOOLEAN DEFAULT 0,
+                eft_weekly_completed BOOLEAN DEFAULT 0,
                 arena_daily_deadline TIMESTAMP,
                 arena_weekly_deadline TIMESTAMP,
                 arena_daily_reminder_hours INTEGER DEFAULT 3,
                 arena_weekly_reminder_hours INTEGER DEFAULT 24,
                 arena_daily_reminder_sent BOOLEAN DEFAULT 0,
-                arena_weekly_reminder_sent BOOLEAN DEFAULT 0
+                arena_weekly_reminder_sent BOOLEAN DEFAULT 0,
+                arena_daily_completed BOOLEAN DEFAULT 0,
+                arena_weekly_completed BOOLEAN DEFAULT 0
             )
         ''')
         self.conn.commit()
@@ -68,6 +72,7 @@ class Database:
         
         deadline_col = f"{game_target}_{task_type}_deadline"
         sent_flag_col = f"{game_target}_{task_type}_reminder_sent"
+        completed_col = f"{game_target}_{task_type}_completed"
 
         if task_type == 'daily':
             deadline = now + datetime.timedelta(hours=24)
@@ -77,7 +82,7 @@ class Database:
             return None
 
         self.cursor.execute(
-            f"UPDATE users SET {deadline_col} = ?, {sent_flag_col} = 0 WHERE user_id = ?",
+            f"UPDATE users SET {deadline_col} = ?, {sent_flag_col} = 0, {completed_col} = 0 WHERE user_id = ?",
             (deadline, user_id)
         )
         
@@ -96,6 +101,11 @@ class Database:
         if not deadline_str:
             return None
         
+        # 完了フラグを立てる
+        completed_col = f"{game_target}_{task_type}_completed"
+        self.cursor.execute(f"UPDATE users SET {completed_col} = 1 WHERE user_id = ?", (user_id,))
+        self.conn.commit()
+
         # SQLiteのタイムスタンプ文字列をdatetimeオブジェクトに変換
         deadline = datetime.datetime.fromisoformat(deadline_str)
         return deadline
@@ -126,10 +136,11 @@ class Database:
                 deadline_col = f"{game}_{task}_deadline"
                 hours_col = f"{game}_{task}_reminder_hours"
                 sent_col = f"{game}_{task}_reminder_sent"
+                completed_col = f"{game}_{task}_completed"
 
                 query = f"""
                     SELECT user_id, {deadline_col}, {hours_col} FROM users
-                    WHERE {deadline_col} IS NOT NULL AND {sent_col} = 0
+                    WHERE {deadline_col} IS NOT NULL AND {sent_col} = 0 AND {completed_col} = 0
                 """
                 self.cursor.execute(query)
                 reminders = self.cursor.fetchall()
@@ -154,6 +165,41 @@ class Database:
         sent_flag_name = f'{game_target}_{task_type}_reminder_sent'
         self.cursor.execute(f"UPDATE users SET {sent_flag_name} = 1 WHERE user_id = ?", (user_id,))
         self.conn.commit()
+
+    def undo_task(self, user_id, game_target, task_type):
+        """
+        完了したタスクを未完了状態に戻す。
+        """
+        user_data = self.get_user(user_id)
+        if not user_data:
+            return None
+
+        deadline_str = user_data.get(f'{game_target}_{task_type}_deadline')
+        if not deadline_str:
+            return None
+
+        completed_col = f'{game_target}_{task_type}_completed'
+        self.cursor.execute(f"UPDATE users SET {completed_col} = 0 WHERE user_id = ?", (user_id,))
+        self.conn.commit()
+
+        return datetime.datetime.fromisoformat(deadline_str)
+
+    def set_manual_deadline(self, user_id, game_target, task_type, new_deadline):
+        """
+        タスクの終了期限を手動で設定し、完了・通知状態をリセットする。
+        """
+        self.add_user_if_not_exists(user_id)
+        deadline_col = f"{game_target}_{task_type}_deadline"
+        sent_flag_col = f"{game_target}_{task_type}_reminder_sent"
+        completed_col = f"{game_target}_{task_type}_completed"
+
+        self.cursor.execute(
+            f"UPDATE users SET {deadline_col} = ?, {sent_flag_col} = 0, {completed_col} = 0 WHERE user_id = ?",
+            (new_deadline, user_id)
+        )
+        self.conn.commit()
+
+        return new_deadline
 
 
 if __name__ == '__main__':
