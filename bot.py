@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from database import Database
 import datetime
 import asyncio
+import time
 
 # .envファイルをロードして環境変数を読み込む
 load_dotenv()
@@ -599,7 +600,12 @@ class ARENAGroup(discord.app_commands.Group):
 
     @discord.app_commands.command(name="status", description="ARENAのデイリーおよびウィークリータスクの残り時間を確認します。")
     async def status(self, interaction: discord.Interaction):
+        t0 = time.perf_counter()
+        # Discord側がコマンドを受理した時刻との差（ネットワーク遅延）を計算
+        net_delay = (datetime.datetime.now(datetime.timezone.utc) - interaction.created_at).total_seconds()
+        
         user_data = db.get_user(interaction.user.id)
+        t1 = time.perf_counter()
         now = datetime.datetime.now(datetime.timezone.utc)
         
         response_lines = ["**ARENAタスク状況**\n"]
@@ -652,7 +658,16 @@ class ARENAGroup(discord.app_commands.Group):
         else:
             response_lines.append("❌ **ウィークリー**: タスク記録なし")
 
+        t2 = time.perf_counter()
         await interaction.response.send_message("\n".join(response_lines), ephemeral=True)
+        t3 = time.perf_counter()
+        
+        print(f"\n[性能テスト] /arena status 実行時間プロファイル:")
+        print(f"  - Discord->Bot ネットワーク遅延: {net_delay:.4f}秒")
+        print(f"  - 最初のDB読込 (get_user): {t1 - t0:.4f}秒")
+        print(f"  - 文字列構築とタスクDB読込: {t2 - t1:.4f}秒")
+        print(f"  - Discordへ返信送信 (send_message): {t3 - t2:.4f}秒")
+        print(f"  - Bot内での合計処理時間 (t0->t3): {t3 - t0:.4f}秒\n")
 
     @discord.app_commands.command(name="about_task", description="ARENAの個別のタスク内容を登録します。")
     @discord.app_commands.describe(task_type="デイリーかウィークリーか選択", task1="タスク1", task2="タスク2(デイリー用)", task3="タスク3(デイリー用)")
