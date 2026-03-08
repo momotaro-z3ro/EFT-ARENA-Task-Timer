@@ -21,3 +21,6 @@ __pycache__/
 spoofer.py
 debug_reminders.py
 time_travel.py
+
+# Logs
+*.log
