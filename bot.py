@@ -110,12 +110,25 @@ async def on_interaction(interaction: discord.Interaction):
     # スラッシュコマンドが実行された時だけログを出す
     if interaction.type == discord.InteractionType.application_command:
         # コマンドの引数（オプション）を取得して整形
-        options_str = ""
+        opts_list = []
+        full_command_name = interaction.data.get('name', 'unknown')
+        
         if 'options' in interaction.data:
-            opts = [f"{opt['name']}={opt['value']}" for opt in interaction.data['options']]
-            options_str = f" 引数: [{', '.join(opts)}]"
+            for opt in interaction.data['options']:
+                # type 1 はサブコマンド（例: `/arena status` の `status` 部分）
+                if opt.get('type') == 1:
+                    full_command_name += f" {opt['name']}"
+                    if 'options' in opt:
+                        for sub_opt in opt['options']:
+                            opts_list.append(f"{sub_opt['name']}={sub_opt.get('value', '')}")
+                else:
+                    opts_list.append(f"{opt['name']}={opt.get('value', '')}")
+        
+        options_str = ""
+        if opts_list:
+            options_str = f" 引数: [{', '.join(opts_list)}]"
             
-        logger.info(f"🖥️ 実行ログ: {interaction.user.name} が コマンド `/{interaction.data['name']}` を実行しました。{options_str}")
+        logger.info(f"🖥️ 実行ログ: {interaction.user.name} が コマンド `/{full_command_name}` を実行しました。{options_str}")
     
     # 必須: これを呼ばないとコマンド自体が動作しなくなる
     await bot.process_application_commands(interaction)
