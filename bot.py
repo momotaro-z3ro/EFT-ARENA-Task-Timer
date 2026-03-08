@@ -398,6 +398,52 @@ class UndoTaskSelectView(discord.ui.View):
             msg = f"❌ タスク「{desc}」を未完了に戻しました！"
             await interaction.response.edit_message(content=msg, view=None)
 
+class ArenaTaskModal(discord.ui.Modal, title='ARENAタスク登録'):
+    task1 = discord.ui.TextInput(
+        label='タスク1 (例: [BG] 敵を5キル)',
+        style=discord.TextStyle.short,
+        placeholder='設定しない場合は空欄でOK',
+        required=False,
+        max_length=100
+    )
+    task2 = discord.ui.TextInput(
+        label='タスク2 (ウィークリー時は無視されます)',
+        style=discord.TextStyle.short,
+        placeholder='設定しない場合は空欄でOK',
+        required=False,
+        max_length=100
+    )
+    task3 = discord.ui.TextInput(
+        label='タスク3 (ウィークリー時は無視されます)',
+        style=discord.TextStyle.short,
+        placeholder='設定しない場合は空欄でOK',
+        required=False,
+        max_length=100
+    )
+
+    def __init__(self, task_type: str):
+        super().__init__()
+        self.task_type = task_type
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        if self.task_type == "weekly" and self.task3.value:
+            await interaction.followup.send("ウィークリータスクは2つまでしか登録できません。(タスク3は無視されます)", ephemeral=True)
+            return
+
+        tasks_dict = {}
+        if self.task1.value:
+            tasks_dict[1] = self.task1.value
+        if self.task_type == "daily":
+            if self.task2.value:
+                tasks_dict[2] = self.task2.value
+            if self.task3.value:
+                tasks_dict[3] = self.task3.value
+            
+        db.set_user_tasks(interaction.user.id, "arena", self.task_type, tasks_dict)
+        type_str = "デイリー" if self.task_type == "daily" else "ウィークリー"
+        await interaction.followup.send(f"ARENAの{type_str}タスク内容を登録しました！ `/arena status` で確認できます。", ephemeral=True)
+
 # --------------------------------------------------------------------------------
 # スラッシュコマンド (EFT)
 # --------------------------------------------------------------------------------
@@ -724,60 +770,15 @@ class ARENAGroup(discord.app_commands.Group):
         print(f"  - Discordへ返信送信 (send_message): {t3 - t2:.4f}秒")
         print(f"  - Bot内での合計処理時間 (t0->t3): {t3 - t0:.4f}秒\n")
 
-    @discord.app_commands.command(name="about_task", description="ARENAの個別のタスク内容を登録します。")
-    @discord.app_commands.describe(
-        task_type="デイリーかウィークリーか選択", 
-        task1="タスク1の内容(任意)", cat1="タスク1のカテゴリ(任意)", 
-        task2="タスク2の内容(任意)", cat2="タスク2のカテゴリ(任意)", 
-        task3="タスク3の内容(任意)", cat3="タスク3のカテゴリ(任意)"
-    )
+    @discord.app_commands.command(name="about_task", description="ARENAの個別のタスク内容を登録します。(モーダル版テスト)")
+    @discord.app_commands.describe(task_type="デイリーかウィークリーか選択")
     @discord.app_commands.choices(task_type=[
         discord.app_commands.Choice(name="デイリー", value="daily"),
         discord.app_commands.Choice(name="ウィークリー", value="weekly")
     ])
-    @discord.app_commands.choices(cat1=[
-        discord.app_commands.Choice(name="BG", value="[BG]"),
-        discord.app_commands.Choice(name="TF", value="[TF]"),
-        discord.app_commands.Choice(name="CPT", value="[CPT]"),
-        discord.app_commands.Choice(name="LH", value="[LH]"),
-        discord.app_commands.Choice(name="TForBG", value="[TForBG]"),
-        discord.app_commands.Choice(name="ANY MODE", value="[ANY]"),
-    ])
-    @discord.app_commands.choices(cat2=[
-        discord.app_commands.Choice(name="BG", value="[BG]"),
-        discord.app_commands.Choice(name="TF", value="[TF]"),
-        discord.app_commands.Choice(name="CPT", value="[CPT]"),
-        discord.app_commands.Choice(name="LH", value="[LH]"),
-        discord.app_commands.Choice(name="TForBG", value="[TForBG]"),
-        discord.app_commands.Choice(name="ANY MODE", value="[ANY]"),
-    ])
-    @discord.app_commands.choices(cat3=[
-        discord.app_commands.Choice(name="BG", value="[BG]"),
-        discord.app_commands.Choice(name="TF", value="[TF]"),
-        discord.app_commands.Choice(name="CPT", value="[CPT]"),
-        discord.app_commands.Choice(name="LH", value="[LH]"),
-        discord.app_commands.Choice(name="TForBG", value="[TForBG]"),
-        discord.app_commands.Choice(name="ANY MODE", value="[ANY]"),
-    ])
-    async def about_task(self, interaction: discord.Interaction, task_type: str, task1: str = None, cat1: str = None, task2: str = None, cat2: str = None, task3: str = None, cat3: str = None):
-        await interaction.response.defer(ephemeral=True)
-        if task_type == "weekly" and (task3 or cat3):
-            await interaction.followup.send("ウィークリータスクは2つまでしか登録できません。(タスク3は無視されます)", ephemeral=True)
-            return
-            
-        def build_desc(c, t):
-            if c and t: return f"{c} {t}"
-            elif c: return c
-            elif t: return t
-            else: return None
-
-        tasks_dict = {1: build_desc(cat1, task1)}
-        if task_type == "daily":
-            tasks_dict[2] = build_desc(cat2, task2)
-            tasks_dict[3] = build_desc(cat3, task3)
-            
-        db.set_user_tasks(interaction.user.id, "arena", task_type, tasks_dict)
-        await interaction.followup.send(f"ARENAの{task_type}タスク内容を登録しました！ `/arena status` で確認できます。", ephemeral=True)
+    async def about_task(self, interaction: discord.Interaction, task_type: str):
+        # モーダルを開く（deferは使えないので直接send_modal）
+        await interaction.response.send_modal(ArenaTaskModal(task_type))
 
     @discord.app_commands.command(name="done_daily", description="ARENAのデイリータスクの完了を報告します。")
     async def done_daily(self, interaction: discord.Interaction):
