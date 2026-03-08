@@ -6,6 +6,19 @@ from database import Database
 import datetime
 import asyncio
 import time
+import logging
+
+# ロギングの設定: ターミナルとファイル (bot.log) の両方に出力する
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler("bot.log", encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger('discord_bot')
 
 # .envファイルをロードして環境変数を読み込む
 load_dotenv()
@@ -20,7 +33,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
 if not BOT_TOKEN:
-    print("エラー: DISCORD_BOT_TOKENが.envファイルに設定されていません。")
+    logger.error("DISCORD_BOT_TOKENが.envファイルに設定されていません。")
     exit()
 
 # データベースのインスタンスを作成
@@ -64,9 +77,9 @@ async def on_ready():
 
     """ボットが起動したときに呼び出されるイベント"""
 
-    print(f'{bot.user.name} としてログインしました。')
+    logger.info(f'{bot.user.name} としてログインしました。')
 
-    print('------')
+    logger.info('------')
 
     # スラッシュコマンドを同期
 
@@ -74,11 +87,11 @@ async def on_ready():
 
         synced = await bot.tree.sync()
 
-        print(f"{len(synced)}個のコマンドを同期しました。")
+        logger.info(f"{len(synced)}個のコマンドを同期しました。")
 
     except Exception as e:
 
-        print(f"コマンドの同期に失敗しました: {e}")
+        logger.error(f"コマンドの同期に失敗しました: {e}")
 
     
 
@@ -90,7 +103,7 @@ async def on_ready():
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
     command_name = interaction.command.name if interaction.command else '不明なコマンド'
-    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ エラー: {interaction.user.name} が /{command_name} を実行中にエラーが発生しました: {error}")
+    logger.error(f"{interaction.user.name} が /{command_name} を実行中にエラーが発生しました: {error}")
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
@@ -102,7 +115,7 @@ async def on_interaction(interaction: discord.Interaction):
             opts = [f"{opt['name']}={opt['value']}" for opt in interaction.data['options']]
             options_str = f" 引数: [{', '.join(opts)}]"
             
-        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🖥️ 実行ログ: {interaction.user.name} が コマンド `/{interaction.data['name']}` を実行しました。{options_str}")
+        logger.info(f"🖥️ 実行ログ: {interaction.user.name} が コマンド `/{interaction.data['name']}` を実行しました。{options_str}")
     
     # 必須: これを呼ばないとコマンド自体が動作しなくなる
     await bot.process_application_commands(interaction)
@@ -166,7 +179,7 @@ async def on_presence_update(before, after):
                             f"・タイマーの残り時間はずれている可能性があります。正しい時間に修正したい場合は `/{game_target} set_daily_timer` を使用してください。"
                         )
                     except discord.Forbidden:
-                        print(f"ユーザー {after.name} ({after.id}) にDMを送信できませんでした。")
+                        logger.error(f"ユーザー {after.name} ({after.id}) にDMを送信できませんでした。")
 
                 # --- ウィークリータスクの確認と開始 ---
                 weekly_deadline_str = user_data.get(f'{game_target}_weekly_deadline')
@@ -189,7 +202,7 @@ async def on_presence_update(before, after):
                             f"・タイマーの残り時間はずれている可能性があります。正しい時間に修正したい場合は `/{game_target} set_weekly_timer` を使用してください。"
                         )
                     except discord.Forbidden:
-                        pass
+                        logger.error(f"ユーザー {after.name} ({after.id}) にDMを送信できませんでした。")
 
     # EFTの起動処理
     await process_game_launch("EFT", "eft", EFT_APP_ID)
