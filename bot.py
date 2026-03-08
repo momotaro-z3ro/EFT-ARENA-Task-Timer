@@ -87,13 +87,10 @@ async def on_ready():
         check_reminders.start()
 
 # ------ 全てのスラッシュコマンドの実行ログを出力するグローバル設定 ------
-@bot.tree.on_error
+@bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
-    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ エラー: {interaction.user.name} が /{interaction.command.name} を実行中にエラーが発生しました: {error}")
-
-@bot.tree.on_error
-async def _global_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
-    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ エラー: {interaction.user.name} が /{interaction.command.name if interaction.command else '不明なコマンド'} を実行中にエラーが発生しました: {error}")
+    command_name = interaction.command.name if interaction.command else '不明なコマンド'
+    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ エラー: {interaction.user.name} が /{command_name} を実行中にエラーが発生しました: {error}")
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
