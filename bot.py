@@ -129,9 +129,6 @@ async def on_interaction(interaction: discord.Interaction):
             options_str = f" 引数: [{', '.join(opts_list)}]"
             
         logger.info(f"🖥️ 実行ログ: {interaction.user.name} が コマンド `/{full_command_name}` を実行しました。{options_str}")
-    
-    # 必須: これを呼ばないとコマンド自体が動作しなくなる
-    await bot.process_application_commands(interaction)
 
 
 
