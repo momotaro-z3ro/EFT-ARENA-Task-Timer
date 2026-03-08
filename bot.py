@@ -82,9 +82,33 @@ async def on_ready():
 
     
 
-    # リマインダーチェックのループを開始
+    # リマインダーチェックのループを開始 (既に動作中ならスキップして再接続エラーを防止)
+    if not check_reminders.is_running():
+        check_reminders.start()
 
-    check_reminders.start()
+# ------ 全てのスラッシュコマンドの実行ログを出力するグローバル設定 ------
+@bot.tree.on_error
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ エラー: {interaction.user.name} が /{interaction.command.name} を実行中にエラーが発生しました: {error}")
+
+@bot.tree.on_error
+async def _global_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ エラー: {interaction.user.name} が /{interaction.command.name if interaction.command else '不明なコマンド'} を実行中にエラーが発生しました: {error}")
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    # スラッシュコマンドが実行された時だけログを出す
+    if interaction.type == discord.InteractionType.application_command:
+        # コマンドの引数（オプション）を取得して整形
+        options_str = ""
+        if 'options' in interaction.data:
+            opts = [f"{opt['name']}={opt['value']}" for opt in interaction.data['options']]
+            options_str = f" 引数: [{', '.join(opts)}]"
+            
+        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🖥️ 実行ログ: {interaction.user.name} が コマンド `/{interaction.data['name']}` を実行しました。{options_str}")
+    
+    # 必須: これを呼ばないとコマンド自体が動作しなくなる
+    await bot.process_application_commands(interaction)
 
 
 
@@ -364,6 +388,7 @@ class EFTGroup(discord.app_commands.Group):
 
     @discord.app_commands.command(name="status", description="EFTのデイリーおよびウィークリータスクの残り時間を確認します。")
     async def status(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         user_data = db.get_user(interaction.user.id)
         now = datetime.datetime.now(datetime.timezone.utc)
         
@@ -417,7 +442,7 @@ class EFTGroup(discord.app_commands.Group):
         else:
             response_lines.append("❌ **ウィークリー**: タスク記録なし")
 
-        await interaction.response.send_message("\n".join(response_lines), ephemeral=True)
+        await interaction.followup.send("\n".join(response_lines), ephemeral=True)
 
     @discord.app_commands.command(name="about_task", description="EFTの個別のタスク内容を登録します。")
     @discord.app_commands.describe(task_type="デイリーかウィークリーか選択", task1="タスク1", task2="タスク2", task3="タスク3(デイリー用)", task4="タスク4(デイリー用)")
@@ -426,8 +451,10 @@ class EFTGroup(discord.app_commands.Group):
         discord.app_commands.Choice(name="ウィークリー", value="weekly")
     ])
     async def about_task(self, interaction: discord.Interaction, task_type: str, task1: str = None, task2: str = None, task3: str = None, task4: str = None):
+        await interaction.response.defer(ephemeral=True)
         if task_type == "weekly" and (task3 or task4):
-            await interaction.response.send_message("ウィークリータスクは2つまでしか登録できません。(task3, task4は無視されます)", ephemeral=True)
+            await interaction.followup.send("ウィークリータスクは2つまでしか登録できません。(task3, task4は無視されます)", ephemeral=True)
+            return
             
         tasks_dict = {1: task1, 2: task2}
         if task_type == "daily":
@@ -435,16 +462,17 @@ class EFTGroup(discord.app_commands.Group):
             tasks_dict[4] = task4
             
         db.set_user_tasks(interaction.user.id, "eft", task_type, tasks_dict)
-        await interaction.response.send_message(f"EFTの{task_type}タスク内容を登録しました！ `/eft status` で確認できます。", ephemeral=True)
+        await interaction.followup.send(f"EFTの{task_type}タスク内容を登録しました！ `/eft status` で確認できます。", ephemeral=True)
 
     @discord.app_commands.command(name="done_daily", description="EFTのデイリータスクの完了を報告します。")
     async def done_daily(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         tasks = db.get_user_tasks(interaction.user.id, 'eft', 'daily')
         incomplete = [t for t in tasks if not t['completed']]
         
         if incomplete:
             view = TaskSelectView(interaction.user.id, 'eft', 'daily', tasks)
-            await interaction.response.send_message("完了した項目を選んでください:", view=view, ephemeral=True)
+            await interaction.followup.send("完了した項目を選んでください:", view=view, ephemeral=True)
             return
             
         next_start_time = db.complete_task(interaction.user.id, 'eft', 'daily')
@@ -452,21 +480,22 @@ class EFTGroup(discord.app_commands.Group):
             now = datetime.datetime.now(datetime.timezone.utc)
             if now < next_start_time:
                 time_until = next_start_time - now
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"EFTデイリータスク完了お疲れ様です！\n次のタスクは **{format_timedelta(time_until)}** 後に開始可能です。", ephemeral=True)
             else:
-                await interaction.response.send_message("EFTデイリータスク完了お疲れ様です！\n次にEFTを起動すると新しいタスクが開始されます。", ephemeral=True)
+                await interaction.followup.send("EFTデイリータスク完了お疲れ様です！\n次にEFTを起動すると新しいタスクが開始されます。", ephemeral=True)
         else:
-            await interaction.response.send_message("現在アクティブなEFTデイリータスクが記録されていません。", ephemeral=True)
+            await interaction.followup.send("現在アクティブなEFTデイリータスクが記録されていません。", ephemeral=True)
 
     @discord.app_commands.command(name="done_weekly", description="EFTのウィークリータスクの完了を報告します。")
     async def done_weekly(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         tasks = db.get_user_tasks(interaction.user.id, 'eft', 'weekly')
         incomplete = [t for t in tasks if not t['completed']]
         
         if incomplete:
             view = TaskSelectView(interaction.user.id, 'eft', 'weekly', tasks)
-            await interaction.response.send_message("完了した項目を選んでください:", view=view, ephemeral=True)
+            await interaction.followup.send("完了した項目を選んでください:", view=view, ephemeral=True)
             return
 
         next_start_time = db.complete_task(interaction.user.id, 'eft', 'weekly')
@@ -474,21 +503,22 @@ class EFTGroup(discord.app_commands.Group):
             now = datetime.datetime.now(datetime.timezone.utc)
             if now < next_start_time:
                 time_until = next_start_time - now
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"EFTウィークリータスク完了お疲れ様です！\n次のタスクは **{format_timedelta(time_until)}** 後に開始可能です。", ephemeral=True)
             else:
-                await interaction.response.send_message("EFTウィークリータスク完了お疲れ様です！\n次にEFTを起動すると新しいタスクが開始されます。", ephemeral=True)
+                await interaction.followup.send("EFTウィークリータスク完了お疲れ様です！\n次にEFTを起動すると新しいタスクが開始されます。", ephemeral=True)
         else:
-            await interaction.response.send_message("現在アクティブなEFTウィークリータスクが記録されていません。", ephemeral=True)
+            await interaction.followup.send("現在アクティブなEFTウィークリータスクが記録されていません。", ephemeral=True)
 
     @discord.app_commands.command(name="undone_daily", description="EFTのデイリータスクの完了状態を取り消し、進行中に戻します。")
     async def undone_daily(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         tasks = db.get_user_tasks(interaction.user.id, 'eft', 'daily')
         completed = [t for t in tasks if t['completed']]
         
         if completed:
             view = UndoTaskSelectView(interaction.user.id, 'eft', 'daily', tasks)
-            await interaction.response.send_message("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
+            await interaction.followup.send("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
             return
             
         result = db.undo_task(interaction.user.id, 'eft', 'daily')
@@ -496,20 +526,21 @@ class EFTGroup(discord.app_commands.Group):
             now = datetime.datetime.now(datetime.timezone.utc)
             if now < result:
                 time_left = result - now
-                await interaction.response.send_message(f"EFTデイリータスクを未完了に戻しました。\n残り時間: **{format_timedelta(time_left)}**", ephemeral=True)
+                await interaction.followup.send(f"EFTデイリータスクを未完了に戻しました。\n残り時間: **{format_timedelta(time_left)}**", ephemeral=True)
             else:
-                await interaction.response.send_message("完了状態を取り消しましたが、既に期限切れです。\n次にEFTを起動すると新しいタスクが開始されます。", ephemeral=True)
+                await interaction.followup.send("完了状態を取り消しましたが、既に期限切れです。\n次にEFTを起動すると新しいタスクが開始されます。", ephemeral=True)
         else:
-            await interaction.response.send_message("取り消すEFTデイリータスクの記録がありません。", ephemeral=True)
+            await interaction.followup.send("取り消すEFTデイリータスクの記録がありません。", ephemeral=True)
 
     @discord.app_commands.command(name="undone_weekly", description="EFTのウィークリータスクの完了状態を取り消し、進行中に戻します。")
     async def undone_weekly(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         tasks = db.get_user_tasks(interaction.user.id, 'eft', 'weekly')
         completed = [t for t in tasks if t['completed']]
         
         if completed:
             view = UndoTaskSelectView(interaction.user.id, 'eft', 'weekly', tasks)
-            await interaction.response.send_message("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
+            await interaction.followup.send("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
             return
             
         result = db.undo_task(interaction.user.id, 'eft', 'weekly')
@@ -517,17 +548,18 @@ class EFTGroup(discord.app_commands.Group):
             now = datetime.datetime.now(datetime.timezone.utc)
             if now < result:
                 time_left = result - now
-                await interaction.response.send_message(f"EFTウィークリータスクを未完了に戻しました。\n残り時間: **{format_timedelta(time_left)}**", ephemeral=True)
+                await interaction.followup.send(f"EFTウィークリータスクを未完了に戻しました。\n残り時間: **{format_timedelta(time_left)}**", ephemeral=True)
             else:
-                await interaction.response.send_message("完了状態を取り消しましたが、既に期限切れです。\n次にEFTを起動すると新しいタスクが開始されます。", ephemeral=True)
+                await interaction.followup.send("完了状態を取り消しましたが、既に期限切れです。\n次にEFTを起動すると新しいタスクが開始されます。", ephemeral=True)
         else:
-            await interaction.response.send_message("取り消すEFTウィークリータスクの記録がありません。", ephemeral=True)
+            await interaction.followup.send("取り消すEFTウィークリータスクの記録がありません。", ephemeral=True)
 
     @discord.app_commands.command(name="set_daily_timer", description="EFTデイリータスクの残り時間を手動で設定し、タイマーを開始します。")
     @discord.app_commands.describe(hours="終了までの残り時間（0〜24時間）", minutes="終了までの残り時間（0〜59分）", seconds="終了までの残り時間（0〜59秒）")
     async def set_daily_timer(self, interaction: discord.Interaction, hours: int, minutes: int = 0, seconds: int = 0):
+        await interaction.response.defer(ephemeral=True)
         if not (0 <= hours <= 24) or not (0 <= minutes <= 59) or not (0 <= seconds <= 59) or (hours == 0 and minutes == 0 and seconds == 0):
-            await interaction.response.send_message("有効な期間を指定してください（最大24時間0分0秒まで）。", ephemeral=True)
+            await interaction.followup.send("有効な期間を指定してください（最大24時間0分0秒まで）。", ephemeral=True)
             return
         
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -536,13 +568,14 @@ class EFTGroup(discord.app_commands.Group):
         
         # JSTで期限を表示
         jst_deadline = deadline.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
-        await interaction.response.send_message(f"EFTデイリータスクを手動で開始しました！\n終了まで: **{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
+        await interaction.followup.send(f"EFTデイリータスクを手動で開始しました！\n終了まで: **{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
 
     @discord.app_commands.command(name="set_weekly_timer", description="EFTウィークリータスクの残り時間を手動で設定し、タイマーを開始します。")
     @discord.app_commands.describe(days="終了までの残り日数（0〜7日）", hours="さらに加算する残り時間（0〜23時間）", minutes="さらに加算する残り時間（0〜59分）", seconds="さらに加算する残り時間（0〜59秒）")
     async def set_weekly_timer(self, interaction: discord.Interaction, days: int, hours: int, minutes: int = 0, seconds: int = 0):
+        await interaction.response.defer(ephemeral=True)
         if not (0 <= days <= 7) or not (0 <= hours <= 23) or not (0 <= minutes <= 59) or not (0 <= seconds <= 59) or (days == 0 and hours == 0 and minutes == 0 and seconds == 0):
-            await interaction.response.send_message("有効な期間を指定してください（最大7日0時間0分0秒まで）。", ephemeral=True)
+            await interaction.followup.send("有効な期間を指定してください（最大7日0時間0分0秒まで）。", ephemeral=True)
             return
             
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -550,7 +583,7 @@ class EFTGroup(discord.app_commands.Group):
         db.set_manual_deadline(interaction.user.id, 'eft', 'weekly', deadline)
         
         jst_deadline = deadline.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
-        await interaction.response.send_message(f"EFTウィークリータスクを手動で開始しました！\n終了まで: **{days}日{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
+        await interaction.followup.send(f"EFTウィークリータスクを手動で開始しました！\n終了まで: **{days}日{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
 
     @discord.app_commands.command(name="reminder", description="EFTタスク終了前のリマインダー通知の時間を設定、または解除します。")
     @discord.app_commands.describe(task_type="タスクの種類", hours="何時間前にお知らせするか", minutes="何分前にお知らせするか", seconds="何秒前にお知らせするか", once="今回限りの設定にするか")
@@ -563,11 +596,12 @@ class EFTGroup(discord.app_commands.Group):
         discord.app_commands.Choice(name="いつでも（毎回適用）", value=0)
     ])
     async def reminder(self, interaction: discord.Interaction, task_type: str, hours: int = 0, minutes: int = 0, seconds: int = 0, once: int = 0):
+        await interaction.response.defer(ephemeral=True)
         total_seconds = hours * 3600 + minutes * 60 + seconds
         
         if total_seconds == 0:
             db.set_reminder(interaction.user.id, 'eft', task_type, 0, False)
-            await interaction.response.send_message(f"EFTの{task_type}タスクのリマインダーを**解除**しました。", ephemeral=True)
+            await interaction.followup.send(f"EFTの{task_type}タスクのリマインダーを**解除**しました。", ephemeral=True)
             return
 
         # Check if the reminder is already in the past
@@ -580,7 +614,7 @@ class EFTGroup(discord.app_commands.Group):
                 if deadline > now:
                     time_left = (deadline - now).total_seconds()
                     if total_seconds >= time_left:
-                        await interaction.response.send_message("⚠️ エラー: 指定したリマインダー時間は、タスクの残り時間よりも長いため、すぐに発火してしまいます。もっと短い時間を指定してください。", ephemeral=True)
+                        await interaction.followup.send("⚠️ エラー: 指定したリマインダー時間は、タスクの残り時間よりも長いため、すぐに発火してしまいます。もっと短い時間を指定してください。", ephemeral=True)
                         return
 
         is_once = bool(once)
@@ -588,7 +622,7 @@ class EFTGroup(discord.app_commands.Group):
         
         rem_once_str = "今回限り" if is_once else "いつでも（毎回適用）"
         time_str = format_timedelta(datetime.timedelta(seconds=total_seconds))
-        await interaction.response.send_message(f"EFTの{task_type}タスクのリマインダーを 終了 **{time_str}前** に設定しました。（{rem_once_str}）", ephemeral=True)
+        await interaction.followup.send(f"EFTの{task_type}タスクのリマインダーを 終了 **{time_str}前** に設定しました。（{rem_once_str}）", ephemeral=True)
 
 # --------------------------------------------------------------------------------
 # スラッシュコマンド (ARENA)
@@ -600,6 +634,7 @@ class ARENAGroup(discord.app_commands.Group):
 
     @discord.app_commands.command(name="status", description="ARENAのデイリーおよびウィークリータスクの残り時間を確認します。")
     async def status(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         t0 = time.perf_counter()
         # Discord側がコマンドを受理した時刻との差（ネットワーク遅延）を計算
         net_delay = (datetime.datetime.now(datetime.timezone.utc) - interaction.created_at).total_seconds()
@@ -659,10 +694,10 @@ class ARENAGroup(discord.app_commands.Group):
             response_lines.append("❌ **ウィークリー**: タスク記録なし")
 
         t2 = time.perf_counter()
-        await interaction.response.send_message("\n".join(response_lines), ephemeral=True)
+        await interaction.followup.send("\n".join(response_lines), ephemeral=True)
         t3 = time.perf_counter()
         
-        print(f"\n[性能テスト] /arena status 実行時間プロファイル:")
+        print(f"\n[性能テスト] /arena status 実行時間プロファイル: ({interaction.user.name} が実行)")
         print(f"  - Discord->Bot ネットワーク遅延: {net_delay:.4f}秒")
         print(f"  - 最初のDB読込 (get_user): {t1 - t0:.4f}秒")
         print(f"  - 文字列構築とタスクDB読込: {t2 - t1:.4f}秒")
@@ -676,25 +711,27 @@ class ARENAGroup(discord.app_commands.Group):
         discord.app_commands.Choice(name="ウィークリー", value="weekly")
     ])
     async def about_task(self, interaction: discord.Interaction, task_type: str, task1: str = None, task2: str = None, task3: str = None):
-        if task_type == "weekly" and (task2 or task3):
-            await interaction.response.send_message("ウィークリータスクは1つまでしか登録できません。(task2, task3は無視されます)", ephemeral=True)
-            
+        await interaction.response.defer(ephemeral=True)
+        if task_type == "weekly" and task3:
+            await interaction.followup.send("ウィークリータスクは2つまでしか登録できません。(task3は無視されます)", ephemeral=True)
+            return
         tasks_dict = {1: task1}
         if task_type == "daily":
             tasks_dict[2] = task2
             tasks_dict[3] = task3
             
         db.set_user_tasks(interaction.user.id, "arena", task_type, tasks_dict)
-        await interaction.response.send_message(f"ARENAの{task_type}タスク内容を登録しました！ `/arena status` で確認できます。", ephemeral=True)
+        await interaction.followup.send(f"ARENAの{task_type}タスク内容を登録しました！ `/arena status` で確認できます。", ephemeral=True)
 
     @discord.app_commands.command(name="done_daily", description="ARENAのデイリータスクの完了を報告します。")
     async def done_daily(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         tasks = db.get_user_tasks(interaction.user.id, 'arena', 'daily')
         incomplete = [t for t in tasks if not t['completed']]
         
         if incomplete:
             view = TaskSelectView(interaction.user.id, 'arena', 'daily', tasks)
-            await interaction.response.send_message("完了した項目を選んでください:", view=view, ephemeral=True)
+            await interaction.followup.send("完了した項目を選んでください:", view=view, ephemeral=True)
             return
 
         next_start_time = db.complete_task(interaction.user.id, 'arena', 'daily')
@@ -702,21 +739,22 @@ class ARENAGroup(discord.app_commands.Group):
             now = datetime.datetime.now(datetime.timezone.utc)
             if now < next_start_time:
                 time_until = next_start_time - now
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"ARENAデイリータスク完了お疲れ様です！\n次のタスクは **{format_timedelta(time_until)}** 後に開始可能です。", ephemeral=True)
             else:
-                await interaction.response.send_message("ARENAデイリータスク完了お疲れ様です！\n次にARENAを起動すると新しいタスクが開始されます。", ephemeral=True)
+                await interaction.followup.send("ARENAデイリータスク完了お疲れ様です！\n次にARENAを起動すると新しいタスクが開始されます。", ephemeral=True)
         else:
-            await interaction.response.send_message("現在アクティブなARENAデイリータスクが記録されていません。", ephemeral=True)
+            await interaction.followup.send("現在アクティブなARENAデイリータスクが記録されていません。", ephemeral=True)
 
     @discord.app_commands.command(name="done_weekly", description="ARENAのウィークリータスクの完了を報告します。")
     async def done_weekly(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         tasks = db.get_user_tasks(interaction.user.id, 'arena', 'weekly')
         incomplete = [t for t in tasks if not t['completed']]
         
         if incomplete:
             view = TaskSelectView(interaction.user.id, 'arena', 'weekly', tasks)
-            await interaction.response.send_message("完了した項目を選んでください:", view=view, ephemeral=True)
+            await interaction.followup.send("完了した項目を選んでください:", view=view, ephemeral=True)
             return
             
         next_start_time = db.complete_task(interaction.user.id, 'arena', 'weekly')
@@ -724,21 +762,22 @@ class ARENAGroup(discord.app_commands.Group):
             now = datetime.datetime.now(datetime.timezone.utc)
             if now < next_start_time:
                 time_until = next_start_time - now
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"ARENAウィークリータスク完了お疲れ様です！\n次のタスクは **{format_timedelta(time_until)}** 後に開始可能です。", ephemeral=True)
             else:
-                await interaction.response.send_message("ARENAウィークリータスク完了お疲れ様です！\n次にARENAを起動すると新しいタスクが開始されます。", ephemeral=True)
+                await interaction.followup.send("ARENAウィークリータスク完了お疲れ様です！\n次にARENAを起動すると新しいタスクが開始されます。", ephemeral=True)
         else:
-            await interaction.response.send_message("現在アクティブなARENAウィークリータスクが記録されていません。", ephemeral=True)
+            await interaction.followup.send("現在アクティブなARENAウィークリータスクが記録されていません。", ephemeral=True)
 
     @discord.app_commands.command(name="undone_daily", description="ARENAのデイリータスクの完了状態を取り消し、進行中に戻します。")
     async def undone_daily(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         tasks = db.get_user_tasks(interaction.user.id, 'arena', 'daily')
         completed = [t for t in tasks if t['completed']]
         
         if completed:
             view = UndoTaskSelectView(interaction.user.id, 'arena', 'daily', tasks)
-            await interaction.response.send_message("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
+            await interaction.followup.send("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
             return
 
         result = db.undo_task(interaction.user.id, 'arena', 'daily')
@@ -746,20 +785,21 @@ class ARENAGroup(discord.app_commands.Group):
             now = datetime.datetime.now(datetime.timezone.utc)
             if now < result:
                 time_left = result - now
-                await interaction.response.send_message(f"ARENAデイリータスクを未完了に戻しました。\n残り時間: **{format_timedelta(time_left)}**", ephemeral=True)
+                await interaction.followup.send(f"ARENAデイリータスクを未完了に戻しました。\n残り時間: **{format_timedelta(time_left)}**", ephemeral=True)
             else:
-                await interaction.response.send_message("完了状態を取り消しましたが、既に期限切れです。\n次にARENAを起動すると新しいタスクが開始されます。", ephemeral=True)
+                await interaction.followup.send("完了状態を取り消しましたが、既に期限切れです。\n次にARENAを起動すると新しいタスクが開始されます。", ephemeral=True)
         else:
-            await interaction.response.send_message("取り消すARENAデイリータスクの記録がありません。", ephemeral=True)
+            await interaction.followup.send("取り消すARENAデイリータスクの記録がありません。", ephemeral=True)
 
     @discord.app_commands.command(name="undone_weekly", description="ARENAのウィークリータスクの完了状態を取り消し、進行中に戻します。")
     async def undone_weekly(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         tasks = db.get_user_tasks(interaction.user.id, 'arena', 'weekly')
         completed = [t for t in tasks if t['completed']]
         
         if completed:
             view = UndoTaskSelectView(interaction.user.id, 'arena', 'weekly', tasks)
-            await interaction.response.send_message("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
+            await interaction.followup.send("未完了に戻す項目を選んでください:", view=view, ephemeral=True)
             return
             
         result = db.undo_task(interaction.user.id, 'arena', 'weekly')
@@ -767,17 +807,18 @@ class ARENAGroup(discord.app_commands.Group):
             now = datetime.datetime.now(datetime.timezone.utc)
             if now < result:
                 time_left = result - now
-                await interaction.response.send_message(f"ARENAウィークリータスクを未完了に戻しました。\n残り時間: **{format_timedelta(time_left)}**", ephemeral=True)
+                await interaction.followup.send(f"ARENAウィークリータスクを未完了に戻しました。\n残り時間: **{format_timedelta(time_left)}**", ephemeral=True)
             else:
-                await interaction.response.send_message("完了状態を取り消しましたが、既に期限切れです。\n次にARENAを起動すると新しいタスクが開始されます。", ephemeral=True)
+                await interaction.followup.send("完了状態を取り消しましたが、既に期限切れです。\n次にARENAを起動すると新しいタスクが開始されます。", ephemeral=True)
         else:
-            await interaction.response.send_message("取り消すARENAウィークリータスクの記録がありません。", ephemeral=True)
+            await interaction.followup.send("取り消すARENAウィークリータスクの記録がありません。", ephemeral=True)
 
     @discord.app_commands.command(name="set_daily_timer", description="ARENAデイリータスクの残り時間を手動で設定し、タイマーを開始します。")
     @discord.app_commands.describe(hours="終了までの残り時間（0〜24時間）", minutes="終了までの残り時間（0〜59分）", seconds="終了までの残り時間（0〜59秒）")
     async def set_daily_timer(self, interaction: discord.Interaction, hours: int, minutes: int = 0, seconds: int = 0):
+        await interaction.response.defer(ephemeral=True)
         if not (0 <= hours <= 24) or not (0 <= minutes <= 59) or not (0 <= seconds <= 59) or (hours == 0 and minutes == 0 and seconds == 0):
-            await interaction.response.send_message("有効な期間を指定してください（最大24時間0分0秒まで）。", ephemeral=True)
+            await interaction.followup.send("有効な期間を指定してください（最大24時間0分0秒まで）。", ephemeral=True)
             return
         
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -785,13 +826,14 @@ class ARENAGroup(discord.app_commands.Group):
         db.set_manual_deadline(interaction.user.id, 'arena', 'daily', deadline)
         
         jst_deadline = deadline.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
-        await interaction.response.send_message(f"ARENAデイリータスクを手動で開始しました！\n終了まで: **{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
+        await interaction.followup.send(f"ARENAデイリータスクを手動で開始しました！\n終了まで: **{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
 
     @discord.app_commands.command(name="set_weekly_timer", description="ARENAウィークリータスクの残り時間を手動で設定し、タイマーを開始します。")
     @discord.app_commands.describe(days="終了までの残り日数（0〜7日）", hours="さらに加算する残り時間（0〜23時間）", minutes="さらに加算する残り時間（0〜59分）", seconds="さらに加算する残り時間（0〜59秒）")
     async def set_weekly_timer(self, interaction: discord.Interaction, days: int, hours: int, minutes: int = 0, seconds: int = 0):
+        await interaction.response.defer(ephemeral=True)
         if not (0 <= days <= 7) or not (0 <= hours <= 23) or not (0 <= minutes <= 59) or not (0 <= seconds <= 59) or (days == 0 and hours == 0 and minutes == 0 and seconds == 0):
-            await interaction.response.send_message("有効な期間を指定してください（最大7日0時間0分0秒まで）。", ephemeral=True)
+            await interaction.followup.send("有効な期間を指定してください（最大7日0時間0分0秒まで）。", ephemeral=True)
             return
             
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -799,7 +841,7 @@ class ARENAGroup(discord.app_commands.Group):
         db.set_manual_deadline(interaction.user.id, 'arena', 'weekly', deadline)
         
         jst_deadline = deadline.astimezone(datetime.timezone(datetime.timedelta(hours=9)))
-        await interaction.response.send_message(f"ARENAウィークリータスクを手動で開始しました！\n終了まで: **{days}日{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
+        await interaction.followup.send(f"ARENAウィークリータスクを手動で開始しました！\n終了まで: **{days}日{hours}時間{minutes}分{seconds}秒** ({jst_deadline.strftime('%m/%d %H:%M:%S')} まで)", ephemeral=True)
 
     @discord.app_commands.command(name="reminder", description="ARENAタスク終了前のリマインダー通知の時間を設定、または解除します。")
     @discord.app_commands.describe(task_type="タスクの種類", hours="何時間前にお知らせするか", minutes="何分前にお知らせするか", seconds="何秒前にお知らせするか", once="今回限りの設定にするか")
@@ -812,11 +854,12 @@ class ARENAGroup(discord.app_commands.Group):
         discord.app_commands.Choice(name="いつでも（毎回適用）", value=0)
     ])
     async def reminder(self, interaction: discord.Interaction, task_type: str, hours: int = 0, minutes: int = 0, seconds: int = 0, once: int = 0):
+        await interaction.response.defer(ephemeral=True)
         total_seconds = hours * 3600 + minutes * 60 + seconds
         
         if total_seconds == 0:
             db.set_reminder(interaction.user.id, 'arena', task_type, 0, False)
-            await interaction.response.send_message(f"ARENAの{task_type}タスクのリマインダーを**解除**しました。", ephemeral=True)
+            await interaction.followup.send(f"ARENAの{task_type}タスクのリマインダーを**解除**しました。", ephemeral=True)
             return
 
         # Check if the reminder is already in the past
@@ -829,7 +872,7 @@ class ARENAGroup(discord.app_commands.Group):
                 if deadline > now:
                     time_left = (deadline - now).total_seconds()
                     if total_seconds >= time_left:
-                        await interaction.response.send_message("⚠️ エラー: 指定したリマインダー時間は、タスクの残り時間よりも長いため、すぐに発火してしまいます。もっと短い時間を指定してください。", ephemeral=True)
+                        await interaction.followup.send("⚠️ エラー: 指定したリマインダー時間は、タスクの残り時間よりも長いため、すぐに発火してしまいます。もっと短い時間を指定してください。", ephemeral=True)
                         return
             
         is_once = bool(once)
@@ -837,7 +880,7 @@ class ARENAGroup(discord.app_commands.Group):
         
         rem_once_str = "今回限り" if is_once else "いつでも（毎回適用）"
         time_str = format_timedelta(datetime.timedelta(seconds=total_seconds))
-        await interaction.response.send_message(f"ARENAの{task_type}タスクのリマインダーを 終了 **{time_str}前** に設定しました。（{rem_once_str}）", ephemeral=True)
+        await interaction.followup.send(f"ARENAの{task_type}タスクのリマインダーを 終了 **{time_str}前** に設定しました。（{rem_once_str}）", ephemeral=True)
 
 # Botの非同期セットアップフック
 async def setup_hook():
@@ -849,6 +892,7 @@ async def setup_hook():
 
     @bot.tree.command(name="help", description="このBotの使い方とコマンド一覧を表示します。")
     async def help_command(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         help_text = (
             "**EFT/ARENA タスクリマインダーBot の使い方**\n\n"
             "1. **自動検知**: Escape from Tarkov または Tarkov: ARENA を起動すると、自動的にデイリー/ウィークリータイマーが開始され、DMに通知が届きます。\n"
@@ -858,7 +902,7 @@ async def setup_hook():
             "5. **状態確認**: `/eft status` 等で現在のタイマーと登録したタスクの進捗が確認できます。\n\n"
             "※コマンドは `/eft [コマンド名]` または `/arena [コマンド名]` のようにグループ化されています。"
         )
-        await interaction.response.send_message(help_text, ephemeral=True)
+        await interaction.followup.send(help_text, ephemeral=True)
 
 bot.setup_hook = setup_hook
 
