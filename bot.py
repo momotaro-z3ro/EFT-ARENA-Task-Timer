@@ -730,6 +730,24 @@ class ARENAGroup(discord.app_commands.Group):
         discord.app_commands.Choice(name="デイリー", value="daily"),
         discord.app_commands.Choice(name="ウィークリー", value="weekly")
     ])
+    @discord.app_commands.choices(task1=[
+        discord.app_commands.Choice(name="BG", value="BG"),
+        discord.app_commands.Choice(name="TF", value="TF"),
+        discord.app_commands.Choice(name="CPT", value="CPT"),
+        discord.app_commands.Choice(name="LH", value="LH"),
+    ])
+    @discord.app_commands.choices(task2=[
+        discord.app_commands.Choice(name="BG", value="BG"),
+        discord.app_commands.Choice(name="TF", value="TF"),
+        discord.app_commands.Choice(name="CPT", value="CPT"),
+        discord.app_commands.Choice(name="LH", value="LH"),
+    ])
+    @discord.app_commands.choices(task3=[
+        discord.app_commands.Choice(name="BG", value="BG"),
+        discord.app_commands.Choice(name="TF", value="TF"),
+        discord.app_commands.Choice(name="CPT", value="CPT"),
+        discord.app_commands.Choice(name="LH", value="LH"),
+    ])
     async def about_task(self, interaction: discord.Interaction, task_type: str, task1: str = None, task2: str = None, task3: str = None):
         await interaction.response.defer(ephemeral=True)
         if task_type == "weekly" and task3:
