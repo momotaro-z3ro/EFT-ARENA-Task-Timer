@@ -24,12 +24,11 @@ print(f"Connecting to Discord to spoof {name}...")
 try:
     # pipe=1 は「2番目に起動したDiscord（例えばPTB版）」を対象にします
     # もし安定版に紐づいてしまう場合は、この数字を 0, 1, 2 と変えて試してみてみるといいかもしれないメモ。
-    pipe_num = 1
-    RPC = pypresence.Presence(client_id, pipe=pipe_num)
+    RPC = pypresence.Presence(client_id)
     RPC.connect()
-    print(f"Connected! Spoofing {name} (ID: {client_id}) on Pipe {pipe_num}")
-    RPC.update(state="In Matches", details="Testing Bot Detection")
-    print("Press Ctrl+C to stop.")
+    print(f"Connected! Spoofing {name} (ID: {client_id})")
+    RPC.update(state="In Matches", details="腹が痛い")
+    print("ガチで.")
     while True:
         time.sleep(15)
 except Exception as e:

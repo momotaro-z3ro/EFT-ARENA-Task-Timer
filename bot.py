@@ -444,6 +444,61 @@ class ArenaTaskModal(discord.ui.Modal, title='ARENAタスク登録'):
         type_str = "デイリー" if self.task_type == "daily" else "ウィークリー"
         await interaction.followup.send(f"ARENAの{type_str}タスク内容を登録しました！ `/arena status` で確認できます。", ephemeral=True)
 
+class EftTaskModal(discord.ui.Modal, title='EFTタスク登録'):
+    task1 = discord.ui.TextInput(
+        label='タスク1',
+        style=discord.TextStyle.short,
+        placeholder='設定しない場合は空欄でOK',
+        required=False,
+        max_length=100
+    )
+    task2 = discord.ui.TextInput(
+        label='タスク2',
+        style=discord.TextStyle.short,
+        placeholder='設定しない場合は空欄でOK',
+        required=False,
+        max_length=100
+    )
+    task3 = discord.ui.TextInput(
+        label='タスク3 (ウィークリー時は無視されます)',
+        style=discord.TextStyle.short,
+        placeholder='設定しない場合は空欄でOK',
+        required=False,
+        max_length=100
+    )
+    task4 = discord.ui.TextInput(
+        label='タスク4 (ウィークリー時は無視されます)',
+        style=discord.TextStyle.short,
+        placeholder='設定しない場合は空欄でOK',
+        required=False,
+        max_length=100
+    )
+
+    def __init__(self, task_type: str):
+        super().__init__()
+        self.task_type = task_type
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        if self.task_type == "weekly" and (self.task3.value or self.task4.value):
+            await interaction.followup.send("ウィークリータスクは2つまでしか登録できません。(タスク3, 4は無視されます)", ephemeral=True)
+            return
+
+        tasks_dict = {}
+        if self.task1.value:
+            tasks_dict[1] = self.task1.value
+        if self.task2.value:
+            tasks_dict[2] = self.task2.value
+        if self.task_type == "daily":
+            if self.task3.value:
+                tasks_dict[3] = self.task3.value
+            if self.task4.value:
+                tasks_dict[4] = self.task4.value
+            
+        db.set_user_tasks(interaction.user.id, "eft", self.task_type, tasks_dict)
+        type_str = "デイリー" if self.task_type == "daily" else "ウィークリー"
+        await interaction.followup.send(f"EFTの{type_str}タスク内容を登録しました！ `/eft status` で確認できます。", ephemeral=True)
+
 # --------------------------------------------------------------------------------
 # スラッシュコマンド (EFT)
 # --------------------------------------------------------------------------------
@@ -510,25 +565,15 @@ class EFTGroup(discord.app_commands.Group):
 
         await interaction.followup.send("\n".join(response_lines), ephemeral=True)
 
-    @discord.app_commands.command(name="about_task", description="EFTの個別のタスク内容を登録します。")
-    @discord.app_commands.describe(task_type="デイリーかウィークリーか選択", task1="タスク1", task2="タスク2", task3="タスク3(デイリー用)", task4="タスク4(デイリー用)")
+    @discord.app_commands.command(name="about_task", description="EFTの個別のタスク内容を登録します。(モーダル版)")
+    @discord.app_commands.describe(task_type="デイリーかウィークリーか選択")
     @discord.app_commands.choices(task_type=[
         discord.app_commands.Choice(name="デイリー", value="daily"),
         discord.app_commands.Choice(name="ウィークリー", value="weekly")
     ])
-    async def about_task(self, interaction: discord.Interaction, task_type: str, task1: str = None, task2: str = None, task3: str = None, task4: str = None):
-        await interaction.response.defer(ephemeral=True)
-        if task_type == "weekly" and (task3 or task4):
-            await interaction.followup.send("ウィークリータスクは2つまでしか登録できません。(task3, task4は無視されます)", ephemeral=True)
-            return
-            
-        tasks_dict = {1: task1, 2: task2}
-        if task_type == "daily":
-            tasks_dict[3] = task3
-            tasks_dict[4] = task4
-            
-        db.set_user_tasks(interaction.user.id, "eft", task_type, tasks_dict)
-        await interaction.followup.send(f"EFTの{task_type}タスク内容を登録しました！ `/eft status` で確認できます。", ephemeral=True)
+    async def about_task(self, interaction: discord.Interaction, task_type: str):
+        # モーダルを開く（deferは使えないので直接send_modal）
+        await interaction.response.send_modal(EftTaskModal(task_type))
 
     @discord.app_commands.command(name="done_daily", description="EFTのデイリータスクの完了を報告します。")
     async def done_daily(self, interaction: discord.Interaction):
