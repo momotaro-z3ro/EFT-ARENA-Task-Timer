@@ -719,12 +719,7 @@ class ARENAGroup(discord.app_commands.Group):
     @discord.app_commands.command(name="status", description="ARENAのデイリーおよびウィークリータスクの残り時間を確認します。")
     async def status(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        t0 = time.perf_counter()
-        # Discord側がコマンドを受理した時刻との差（ネットワーク遅延）を計算
-        net_delay = (datetime.datetime.now(datetime.timezone.utc) - interaction.created_at).total_seconds()
-        
         user_data = db.get_user(interaction.user.id)
-        t1 = time.perf_counter()
         now = datetime.datetime.now(datetime.timezone.utc)
         
         response_lines = ["**ARENAタスク状況**\n"]
@@ -777,16 +772,7 @@ class ARENAGroup(discord.app_commands.Group):
         else:
             response_lines.append("❌ **ウィークリー**: タスク記録なし")
 
-        t2 = time.perf_counter()
         await interaction.followup.send("\n".join(response_lines), ephemeral=True)
-        t3 = time.perf_counter()
-        
-        print(f"\n[性能テスト] /arena status 実行時間プロファイル: ({interaction.user.name} が実行)")
-        print(f"  - Discord->Bot ネットワーク遅延: {net_delay:.4f}秒")
-        print(f"  - 最初のDB読込 (get_user): {t1 - t0:.4f}秒")
-        print(f"  - 文字列構築とタスクDB読込: {t2 - t1:.4f}秒")
-        print(f"  - Discordへ返信送信 (send_message): {t3 - t2:.4f}秒")
-        print(f"  - Bot内での合計処理時間 (t0->t3): {t3 - t0:.4f}秒\n")
 
     @discord.app_commands.command(name="about_task", description="ARENAの個別のタスク内容を登録します。(モーダル版テスト)")
     @discord.app_commands.describe(task_type="デイリーかウィークリーか選択")
@@ -942,9 +928,10 @@ async def setup_hook():
             "1. **自動検知**: Escape from Tarkov または Tarkov: ARENA を起動すると、自動的にデイリー/ウィークリータイマーが開始され、DMに通知が届きます。\n"
             "2. **タスクの登録**: `/eft about_task` や `/arena about_task` で、現在のタスク内容をメモできます。\n"
             "3. **手動タイマー調整**: 実際の残り時間とずれている場合は、`/eft set_daily_timer` 等で時間を直接指定してタイマーを開始できます。\n"
-            "4. **完了報告**: `/eft done_daily` などのコマンドを実行し、完了したタスクを選ぶと、次回ゲーム起動時までタイマーが停止します。\n"
-            "5. **状態確認**: `/eft status` 等で現在のタイマーと登録したタスクの進捗が確認できます。\n\n"
-            "※コマンドは `/eft [コマンド名]` または `/arena [コマンド名]` のようにグループ化されています。"
+            "4. **完了報告**: `/eft done` などのコマンドを実行し、完了したタスクを選ぶと、完了したことを確認できます。\n"
+            "5. **状態確認**: `/eft status` 等で現在のタイマーと登録したタスクの進捗が確認できます。\n"
+            "※コマンドは `/eft [コマンド名]` または `/arena [コマンド名]` のようにグループ化されています。\n"
+            "※このbotを利用しない場合は`/disable`を、再び利用したい場合は`/enable`を実行してください。\n"
         )
         await interaction.followup.send(help_text, ephemeral=True)
 
@@ -984,6 +971,28 @@ async def setup_hook():
             
         status = "\n\n".join(activities_text)
         await interaction.followup.send(f"**現在Botが認識しているアクティビティ:**\n\n{status}", ephemeral=True)
+
+    @bot.tree.command(name="response_test", description="開発用なので使わないで‼")
+    async def response_test_command(interaction: discord.Interaction):
+        t0 = time.perf_counter()
+        await interaction.response.defer(ephemeral=True)
+        # Discord側がコマンドを受理した時刻との差（ネットワーク遅延）を計算
+        net_delay = (datetime.datetime.now(datetime.timezone.utc) - interaction.created_at).total_seconds()
+        
+        # ダミーのDB読込
+        t1 = time.perf_counter()
+        _ = db.get_user(interaction.user.id)
+        t2 = time.perf_counter()
+        
+        await interaction.followup.send("✅ 性能テスト計測完了。コンソールを確認してください。", ephemeral=True)
+        t3 = time.perf_counter()
+        
+        print(f"\n[性能テスト] /response_test 実行時間プロファイル: ({interaction.user.name} が実行)")
+        print(f"  - Discord->Bot ネットワーク遅延: {net_delay:.4f}秒")
+        print(f"  - DB読込時間 (get_user): {t1 - t0:.4f}秒")
+        print(f"  - 文字列構築等処理: {t2 - t1:.4f}秒")
+        print(f"  - Discordへ返信送信 (send_message): {t3 - t2:.4f}秒")
+        print(f"  - Bot内での合計処理時間 (t0->t3): {t3 - t0:.4f}秒\n")
 
 bot.setup_hook = setup_hook
 
