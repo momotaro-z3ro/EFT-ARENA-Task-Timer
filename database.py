@@ -41,9 +41,14 @@ class Database:
                 arena_daily_reminder_once BOOLEAN DEFAULT 0,
                 arena_weekly_reminder_once BOOLEAN DEFAULT 0,
                 arena_daily_completed BOOLEAN DEFAULT 0,
-                arena_weekly_completed BOOLEAN DEFAULT 0
+                arena_weekly_completed BOOLEAN DEFAULT 0,
+                is_enabled BOOLEAN DEFAULT 1
             )
         ''')
+        try:
+            self.cursor.execute("ALTER TABLE users ADD COLUMN is_enabled BOOLEAN DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,6 +83,14 @@ class Database:
         if not self.get_user(user_id):
             self.cursor.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
             self.conn.commit()
+
+    def set_bot_enabled(self, user_id, enabled: bool):
+        """
+        ユーザーごとのBotの通知機能を有効/無効にする。
+        """
+        self.add_user_if_not_exists(user_id)
+        self.cursor.execute("UPDATE users SET is_enabled = ? WHERE user_id = ?", (1 if enabled else 0, user_id))
+        self.conn.commit()
 
     def start_task(self, user_id, game_target, task_type):
         """

@@ -1,9 +1,11 @@
 # Environments
 .env
-.venv/
-venv/
+.myenv/
+myenv
 ENV/
 env/
+venv/
+.venv/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -21,3 +23,6 @@ __pycache__/
 spoofer.py
 debug_reminders.py
 time_travel.py
+
+# Logs
+*.log
