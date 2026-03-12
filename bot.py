@@ -166,6 +166,10 @@ async def on_presence_update(before, after):
                 
                 db.add_user_if_not_exists(user_id)
                 user_data = db.get_user(user_id)
+                
+                # ボット機能が無効な場合は何もしない
+                if user_data and user_data.get('is_enabled') == 0:
+                    return
 
                 # --- デイリータスクの確認と開始 ---
                 daily_deadline_str = user_data.get(f'{game_target}_daily_deadline')
@@ -943,6 +947,43 @@ async def setup_hook():
             "※コマンドは `/eft [コマンド名]` または `/arena [コマンド名]` のようにグループ化されています。"
         )
         await interaction.followup.send(help_text, ephemeral=True)
+
+    @bot.tree.command(name="enable", description="Botの通知と新タスク開始（自動検知）を有効化します。")
+    async def enable_command(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        db.set_bot_enabled(interaction.user.id, True)
+        await interaction.followup.send("✅ Botの通知と自動検知が **有効** になりました！\n次回EFT/ARENAを起動した際にDMが届きます。", ephemeral=True)
+
+    @bot.tree.command(name="disable", description="Botの通知と新タスク開始（自動検知）を無効化します。")
+    async def disable_command(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        db.set_bot_enabled(interaction.user.id, False)
+        await interaction.followup.send("❌ Botの通知と自動検知が **無効** になりました！\nEFT/ARENAを起動してもDMが送られなくなります。\n再度有効にするには `/enable` を実行してください。", ephemeral=True)
+
+    @bot.tree.command(name="rp_test", description="現在Botが認識しているあなたのステータス（起動中ゲーム）を確認します。")
+    async def rp_test_command(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        activities_list = []
+        
+        # DMからの呼び出し等も考慮し、Botが参加しているサーバーの中からユーザーを探す
+        for guild in bot.guilds:
+            member = guild.get_member(interaction.user.id)
+            if member and member.activities:
+                activities_list = member.activities
+                break
+        
+        if not activities_list:
+            await interaction.followup.send("現在、何もゲームを起動していないか、またはRich Presence(アクティビティ)をBotが読み取れていません。\nDiscordのユーザー設定から「アクティビティステータス」の表示がオンになっているか確認してください。", ephemeral=True)
+            return
+            
+        activities_text = []
+        for activity in activities_list:
+            app_id = getattr(activity, 'application_id', 'なし')
+            activities_text.append(f"🎮 **{activity.name}**\n  - Application ID: `{app_id}`")
+            
+        status = "\n\n".join(activities_text)
+        await interaction.followup.send(f"**現在Botが認識しているアクティビティ:**\n\n{status}", ephemeral=True)
 
 bot.setup_hook = setup_hook
 
